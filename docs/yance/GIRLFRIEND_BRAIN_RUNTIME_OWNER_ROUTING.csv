@@ -1,0 +1,23 @@
+Action,Execution owner,Data authority,Admission,Yance role / boundary
+send_message,chattermate.message_delivery,ChatHistory + ChannelConversation,PASS,native single send owner
+find_contact,chattermate.customer_people,Customer,PASS,native
+search_history,chattermate.chat_history,ChatHistory,PASS,native
+assign_handoff,chattermate.human_routing,SessionToAgent,PASS,native
+search_knowledge,chattermate.knowledge,Knowledge + FAQ,PASS,native
+run_workflow,chattermate.workflow,Workflow + SessionToAgent,PASS,native
+knowledge_ingest,chattermate.knowledge,Knowledge,PASS,native additive
+faq_generate,chattermate.faq_generator,FAQ + Knowledge,PASS,native additive
+call_tool,chattermate.mcp,MCPTool,PASS,native additive
+crm_sync,chattermate.crm,Customer remains canonical,PASS,native additive
+ticket_investigation,chattermate.ticket_investigation,Ticket + Investigation,PASS,native additive
+jira_action,chattermate.jira,Jira integration,PASS,native additive
+database_tool,chattermate.guardrailed_db,external DB remains source,PASS,native additive
+notification,chattermate.notifications,User notification state,PASS,native additive
+model_selection,chattermate.model_catalog,AIConfig,PASS,native
+persona_history,sqlalchemy_continuum,Agent.instructions history only,PASS,Wave B admitted
+deterministic_image_edit,imagemagick,artifact -> FileAttachment,PASS,Wave B admitted external CLI
+audio_video_transform,ffmpeg,artifact -> FileAttachment,PASS,Wave B admitted external CLI
+translation,NO_OWNER_SELECTED,projection only,HOLD_OWNER_PRODUCTION_QUALIFICATION,Fail closed; Lingua may signal language/integrity only; native ChatterMate send remains physical send authority; no custom translator
+relationship_memory,graphiti,derived graph only,HOLD,Wave C
+voice,voice_owner,generated FileAttachment,HOLD,Wave D
+generative_media,comfyui,generated FileAttachment,HOLD,Wave E

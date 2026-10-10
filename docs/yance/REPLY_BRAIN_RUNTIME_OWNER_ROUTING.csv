@@ -1,0 +1,14 @@
+Action,Execution owner,Data authority,Admission,Yance role / boundary
+candidate_generation,chattermate.agent,Agent + AIConfig,PASS,composition semantics only
+candidate_ranking,chattermate.agent,Agent + AIConfig,PASS,ranking criteria only
+recompute,chattermate.agent,Agent + AIConfig,PASS,invoke native owner again
+file_attachment,chattermate.file_attachment,FileAttachment,PASS,native
+final_send,chattermate.message_delivery,ChatHistory + ChannelConversation,PASS,single physical send owner
+learning_evidence,chattermate.chat_history_rating,ChatHistory + Rating,PASS,evidence only; no learning DB
+persona_history,sqlalchemy_continuum,Agent.instructions history only,PASS,history/rollback only
+deterministic_image_edit,imagemagick,artifact -> FileAttachment,PASS,CLI primitive only
+audio_video_transform,ffmpeg,artifact -> FileAttachment,PASS,CLI primitive only
+translation,NO_OWNER_SELECTED,projection only,HOLD_OWNER_PRODUCTION_QUALIFICATION,Fail closed; Lingua may signal language/integrity only; native ChatterMate send remains physical send authority; no custom translator
+relationship_memory,graphiti,derived graph only,HOLD,Wave C
+voice,voice_owner,generated FileAttachment,HOLD,Wave D
+generative_media,comfyui,generated FileAttachment,HOLD,Wave E

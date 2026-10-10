@@ -1,0 +1,140 @@
+# Web Framework
+# fastapi and starlette are pinned for reproducible builds; bump them together and
+# run the API suite. fastapi only requires starlette>=0.46.0 (no upper bound).
+# starlette must stay >=1.3.1: that release enforces the request.form() limits
+# for urlencoded bodies (GHSA-82w8-qh3p-5jfq).
+# (The earlier "fastapi 0.138.0 breaks error handling" note was the takeover
+# tests' route-swap hack becoming live, not a framework regression; the hack is gone.)
+fastapi==0.137.2
+starlette==1.6.0
+uvicorn
+python-socketio
+websockets
+
+# Database
+sqlalchemy
+SQLAlchemy-Continuum==1.8.0  # Yance Persona history only; Agent.instructions remains current authority
+alembic
+psycopg[binary]>=3.1.0
+asyncpg
+
+# Authentication & Security
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt>=3.2.0,<4.0.0
+python-multipart
+
+# Environment & Config
+python-dotenv
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Utilities
+email-validator
+python-dateutil
+requests
+beautifulsoup4
+# Window176: mature deterministic condition matcher for reviewed persona guidelines.
+# Persistence stays in ChatterMate Knowledge/PgVector; this package owns no DB/runtime.
+rule-engine==5.0.2
+pypinyin==0.55.0  # Window227: bounded Chinese proper-name phonetic check only
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov==4.1.0
+pytest-mock
+coverage==7.4.1
+
+
+# Sentiment Analysis
+textblob
+
+#ai
+openai==3.24.0
+runwayml==5.21.0
+agno==3.1.1
+duckduckgo-search
+pypdf
+pgvector
+
+google-genai==2.28.0
+google-cloud-aiplatform
+ollama
+anthropic
+mistralai==3.0.0
+
+#ocr
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.23.0
+opencv-python==4.12.0.88
+
+#pdf
+pypdf
+
+pytz
+
+firebase_admin
+beautifulsoup4
+aiofiles
+
+# help-center article rendering: FAQ answers are authored/stored as Markdown and
+# rendered to sanitized HTML on the public page (markdown -> nh3 allowlist clean).
+markdown
+nh3
+# help-center article import: crawled help pages are converted HTML -> Markdown
+# (subclassed converter re-hosts images and absolutizes links inline).
+markdownify
+
+gunicorn
+
+redis
+
+
+aiohttp
+
+bs4
+
+boto3
+
+groq
+
+# Embeddings run on fastembed (ONNX); no torch/transformers stack is installed.
+fastembed==0.7.3
+
+# Voice runtime owners (Window 40): native provider/OSS seams only.
+faster-whisper==1.2.1
+# faster-whisper 1.2.1 still calls av.open(metadata_errors=...).
+# PyAV 19 removed that API on 2026-09-29; keep the current stable STT usable.
+av>=11,<19
+elevenlabs==2.71.0
+
+# Shopify API
+ShopifyAPI
+
+# Razorpay payment gateway
+razorpay
+
+# Agno 3.1.1 native MCP dependency line qualified in Window 20/25/35.
+mcp==2.3.0
+fastmcp==4.0.11
+
+# UV tool runner for Python-based MCP servers
+uv
+
+# Web Crawling
+httpx
+# pyOpenSSL and cryptography move together: each pyOpenSSL release bounds the
+# cryptography versions it accepts (26.4 needs >=49,<51).
+pyOpenSSL==26.4.0
+cryptography==50.0.1
+# 0.7.x hard-required sentence-transformers (and with it torch); 0.9 dropped that.
+crawl4ai>=0.9
+
+# Help center (public SSR templates + custom-domain DNS verification)
+jinja2
+dnspython
+sqlglot>=30.0
+pymysql>=1.1
+sshtunnel>=0.4.0
+paramiko>=3.4,<4

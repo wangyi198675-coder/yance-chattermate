@@ -1,0 +1,37 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Yance",
+  "version": "0.0.355",
+  "identifier": "com.yance.desktop",
+  "build": {
+    "beforeBuildCommand": "",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Yance",
+        "width": 920,
+        "height": 620,
+        "resizable": true,
+        "decorations": false,
+        "visible": true,
+        "focus": true,
+        "fullscreen": false,
+        "skipTaskbar": false,
+        "preventOverflow": true,
+        "dataDirectory": "Yance/cache/webview2",
+        "devtools": false,
+        "browserExtensionsEnabled": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}

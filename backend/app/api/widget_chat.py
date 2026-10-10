@@ -1,0 +1,2479 @@
+"""
+Copyright 2024-2026 ChatterMate
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
+import asyncio
+import datetime
+import json
+import os
+import re
+from types import SimpleNamespace
+from fastapi import APIRouter
+from app.core.socketio import sio
+from app.core.logger import get_logger
+import traceback
+from app.agents.chat_agent import ChatAgent, ChatResponse
+from app.core.auth_utils import (
+    authenticate_socket,
+    authenticate_socket_conversation_token,
+    widget_socket_identity,
+)
+from app.database import get_db
+from app.repositories.ai_config import AIConfigRepository
+from app.repositories.widget import WidgetRepository
+from app.repositories.agent_shopify_config_repository import AgentShopifyConfigRepository
+from app.core.security import decrypt_api_key, verify_conversation_token
+from app.repositories.session_to_agent import SessionToAgentRepository
+from app.repositories.chat import ChatRepository, ClientSendIntentConflict
+from app.repositories.file_attachment import FileAttachmentRepository
+from app.repositories.customer import CustomerRepository
+import uuid
+from app.services.socket_rate_limit import socket_rate_limit
+from app.services import conversation_token as conversation_token_service
+from app.services.workflow_chat import (WorkflowChatService, resume_deferred_workflow_messages,
+    resume_pending_workflow_terminal_controls, apply_pending_workflow_terminal_control,
+    deliver_workflow_auto_message, workflow_transfer_spec,
+    latest_workflow_source_id)
+from app.services.yance_turn_authority import (context_revision as workflow_context_revision,
+    reconcile_workflow_own_revision)
+from app.services.file_upload_service import FileUploadService
+from app.core.config import settings
+from app.core.s3 import get_s3_signed_url
+
+from app.models.session_to_agent import SessionStatus
+from app.agents.transfer_agent import get_agent_availability_response
+from app.repositories.agent import AgentRepository
+from app.services.chat_notifications import notify_new_chat
+from app.services.contact_capture import retain_unstored_email
+from app.services.human_routing import (
+    HUMAN_ONLY_ACK,
+    QUEUED_FOR_HUMAN_NOTICE,
+    notify_customer,
+)
+from app.services.lead_capture import record_lead_from_response
+from app.services.message_delivery import deliver_to_customer, recover_pending_web_auto_messages
+from app.services.translation import (
+    OUTBOUND_PAIRING_ATTR_KEY,
+    protect_outbound_pairing,
+    validate_outbound_pairing,
+)
+from app.services.yance_reply_runtime import finalize_successful_send_learning
+from app.repositories.rating import RatingRepository
+from app.services.ticket_csat import record_conversation_rating
+from app.repositories.jira import JiraRepository
+from app.models.ai_config import AIModelType
+from app.services.workflow_execution import WorkflowExecutionService
+from app.core.config import settings
+
+
+# Try to import enterprise modules
+try:
+    from app.enterprise.services.message_limit import check_message_limit
+    HAS_ENTERPRISE = True
+except ImportError:
+    HAS_ENTERPRISE = False
+
+from app.utils.sanitize import sanitize_message
+
+router = APIRouter()
+logger = get_logger(__name__)
+
+
+async def _emit_bot_typing(session_id: str) -> None:
+    """Tell the widget a reply is actually being produced.
+
+    The widget owns no opinion about this: it shows the typing indicator only
+    between this event and the reply that follows. Every path that answers
+    nothing — a human-only agent, a chat someone has taken over, a closed
+    session — simply never calls this, so the indicator cannot be left spinning
+    over a conversation nobody is answering.
+    """
+    await sio.emit('bot_typing', {'session_id': session_id},
+                   room=session_id, namespace='/widget')
+
+# Rating feedback comes from an anonymous widget visitor and is stored, shown
+# to agents and copied onto the linked ticket's activity feed — bound it.
+MAX_RATING_FEEDBACK_LENGTH = 2000
+
+
+def format_datetime(dt):
+    """Convert datetime to ISO format string"""
+    return dt.isoformat() if dt else None
+
+def validate_email(email: str) -> bool:
+    """Validate email format"""
+    if not email:
+        return False
+    email_pattern = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    return re.match(email_pattern, email) is not None
+
+def validate_phone_number(phone: str) -> bool:
+    """Validate phone number format"""
+    if not phone:
+        return False
+    # Remove all non-digit characters
+    clean_phone = re.sub(r'\D', '', phone)
+    # Check if it's between 7 and 15 digits (international standard)
+    return 7 <= len(clean_phone) <= 15
+
+def validate_form_field(field_config: dict, value: any) -> str:
+    """Validate a single form field based on its configuration"""
+    field_name = field_config.get('name', 'Field')
+    field_label = field_config.get('label', field_name)
+    field_type = field_config.get('type', 'text')
+    required = field_config.get('required', False)
+    min_length = field_config.get('minLength', 0)
+    max_length = field_config.get('maxLength', None)
+    
+    # Required field validation
+    if required and (value is None or str(value).strip() == ''):
+        return f"{field_label} is required"
+    
+    # Skip further validation if field is empty and not required
+    if value is None or str(value).strip() == '':
+        return None
+    
+    value_str = str(value).strip()
+    
+    # Email validation
+    if field_type == 'email' and not validate_email(value_str):
+        return f"Please enter a valid email address for {field_label}"
+    
+    # Phone number validation
+    if field_type == 'tel' and not validate_phone_number(value_str):
+        return f"Please enter a valid phone number for {field_label}"
+    
+    # Length validation for text fields
+    if field_type in ['text', 'textarea']:
+        if min_length and len(value_str) < min_length:
+            return f"{field_label} must be at least {min_length} characters"
+        if max_length and len(value_str) > max_length:
+            return f"{field_label} must not exceed {max_length} characters"
+    
+    # Number validation
+    if field_type == 'number':
+        try:
+            num_value = float(value_str)
+            if min_length is not None and num_value < min_length:
+                return f"{field_label} must be at least {min_length}"
+            if max_length is not None and num_value > max_length:
+                return f"{field_label} must not exceed {max_length}"
+        except ValueError:
+            return f"{field_label} must be a valid number"
+    
+    return None
+
+def validate_form_data(form_fields: list, form_data: dict) -> list:
+    """Validate form data against field configurations"""
+    errors = []
+    
+    for field_config in form_fields:
+        field_name = field_config.get('name')
+        if not field_name:
+            continue
+            
+        value = form_data.get(field_name)
+        error = validate_form_field(field_config, value)
+        
+        if error:
+            errors.append(error)
+    
+    return errors
+
+@sio.on('connect', namespace='/widget')
+async def widget_connect(sid, environ, auth):
+    db = None
+    try:
+       
+        logger.info(f"Widget client connected: {auth}")
+        # Authenticate using conversation token from Authorization header
+        widget_id, org_id, customer_id, conversation_token = await authenticate_socket_conversation_token(sid, auth)
+        
+        if not widget_id or not org_id:
+            raise ValueError("Widget authentication failed")
+
+        # Get widget and verify it exists
+        db = next(get_db())
+        widget_repo = WidgetRepository(db)
+        widget = widget_repo.get_widget(widget_id)
+        if not widget:
+            raise ValueError("Invalid widget ID")
+
+        # Get AI config for widget's organization
+        ai_config_repo = AIConfigRepository(db)
+        ai_config = ai_config_repo.get_active_config(org_id)
+        if not ai_config:
+            await sio.emit('error', {
+                'error': 'AI configuration required',
+                'type': 'ai_config_missing'
+            }, to=sid, namespace='/widget')
+            return False
+        
+        message_limit_reached = False
+        # Check message limits if enterprise module is available
+        if HAS_ENTERPRISE and ai_config.model_type == AIModelType.CHATTERMATE:
+            if not await check_message_limit(db, org_id, sid, sio):
+                message_limit_reached = True
+
+        
+        session_repo = SessionToAgentRepository(db)
+                
+        # Try to get existing active session
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id,
+            agent_id=widget.agent_id
+        )
+              
+        session_created = active_session is None
+        if active_session:
+            session_id = str(active_session.session_id)
+            logger.debug(f"Active session: {session_id}")  
+        else:
+            # Create new session if none exists. Stamp the channel now, the way
+            # the messaging channels do: an agent wired to a Shopify store is
+            # serving that storefront, and the inbox labels the conversation
+            # accordingly. Still a widget surface — see WIDGET_CHANNELS.
+            new_session_id = str(uuid.uuid4())
+            shopify_config = AgentShopifyConfigRepository(db).get_agent_shopify_config(
+                str(widget.agent_id)
+            )
+            session_repo.create_session(
+                session_id=new_session_id,
+                agent_id=widget.agent_id,
+                customer_id=customer_id,
+                organization_id=org_id,
+                channel='shopify' if shopify_config and shopify_config.enabled else 'web'
+            )
+            session_id = new_session_id
+            logger.debug(f"New session: {session_id}")
+
+        # Join the room using session_id
+        await sio.enter_room(sid, session_id, namespace='/widget')
+        
+        # Get agent to retrieve rate limiting settings
+        agent_repo = AgentRepository(db)
+        agent = agent_repo.get_agent(widget.agent_id)
+        
+        # Store session data including rate limiting settings
+        enable_rate_limiting = agent.enable_rate_limiting if agent else False
+        overall_limit_per_ip = agent.overall_limit_per_ip if agent else 100
+        requests_per_sec = agent.requests_per_sec if agent else 1.0
+        
+        # Source (Explore flow) and whether the embedding app vouched for this
+        # visitor - both live in the conversation token, so no extra query.
+        source = None
+        is_identified = False
+        try:
+            token_data = verify_conversation_token(conversation_token)
+            if token_data:
+                source = token_data.get("source")
+                is_identified = bool(token_data.get("customer_email") or token_data.get("email"))
+        except Exception:
+            pass
+        
+        # Snapshot only the fields the rest of the app reads from session['ai_config']
+        # (encrypted_api_key/model_name/model_type) into a plain, DB-independent object.
+        # This dict lives in the socket.io session store across the whole conversation,
+        # long after this handler's db session closes - caching the live ORM instance
+        # here would raise DetachedInstanceError on later access.
+        ai_config_snapshot = SimpleNamespace(
+            encrypted_api_key=ai_config.encrypted_api_key,
+            model_name=ai_config.model_name,
+            model_type=ai_config.model_type,
+            settings=ai_config.settings,
+        )
+
+        session_data = {
+            'widget_id': widget_id,
+            'org_id': org_id,
+            'agent_id': str(widget.agent_id),
+            'customer_id': customer_id,
+            'session_id': session_id,
+            'ai_config': ai_config_snapshot,
+            'conversation_token': conversation_token,
+            # Add rate limiting settings
+            'enable_rate_limiting': enable_rate_limiting,
+            'overall_limit_per_ip': overall_limit_per_ip,
+            'requests_per_sec': requests_per_sec,
+            'message_limit_reached': message_limit_reached,
+            # Cached like use_workflow: read once per connection so the
+            # human-only check costs no query per message.
+            'ai_replies_enabled': agent.ai_replies_enabled if agent else True,
+            'use_workflow': agent.use_workflow if agent else False,
+            'active_workflow_id': agent.active_workflow_id if agent else None,
+            'source': source,
+            # Host page that embeds the widget (sent by the webclient). Recorded on
+            # lead capture as lead_source.page_url so you can see WHERE leads convert.
+            'page_url': str((auth or {}).get('page_url') or '')[:500] or None,
+        }
+
+        # Log rate limiting settings
+        if enable_rate_limiting:
+            logger.debug(f"Rate limiting enabled for agent {agent.name} - Daily limit: {overall_limit_per_ip} requests, Rate: {requests_per_sec} req/sec")
+        else:
+            logger.debug(f"Rate limiting disabled for agent {agent.name}")
+
+        logger.debug(f"Session data: {session_data['ai_config'].encrypted_api_key}")
+        await sio.save_session(sid, session_data, namespace='/widget')
+        logger.info(f"Widget client connected: {sid} joined room: {session_id}")
+        
+        # Send session_id back to client immediately so it can be used for end_chat.
+        # `authenticated` lets the widget tell the host page whether a conversation it
+        # just started belongs to the identified visitor or to an anonymous one.
+        await sio.emit('session_initialized', {
+            'session_id': session_id,
+            'customer_id': customer_id,
+            'agent_id': str(widget.agent_id),
+            'authenticated': is_identified,
+            'created': session_created
+        }, to=sid, namespace='/widget')
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Widget connection error for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Connection failed',
+            'type': 'connection_error'
+        }, to=sid, namespace='/widget')
+        return False
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('chat', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def handle_widget_chat(sid, data):
+    """Handle widget chat messages"""
+    db = None
+    try:
+        # Identity was established (and the token verified) at connect time.
+        session = await sio.get_session(sid, namespace='/widget')
+
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        # Process message and files
+        original_message = data.get('message', '').strip()
+        
+        # Sanitize message to prevent XSS attacks
+        message = sanitize_message(original_message)
+        
+        files = data.get('files', [])  # List of file objects with base64 content
+        
+        # If message was stripped to empty but had content before, it was malicious
+        if original_message and not message.strip() and not files:
+            logger.warning(f"Blocked malicious message from customer {customer_id}")
+            await sio.emit('error', {
+                'error': 'Your message contains unsafe content and cannot be sent.',
+                'type': 'validation_error'
+            }, room=sid, namespace='/widget')
+            return
+        
+        if not message.strip() and not files:
+            return
+
+        session_id = session['session_id']
+        
+        # Upload files if provided
+        uploaded_files = []
+        if files:
+            db_temp = next(get_db())
+            try:
+                agent_repo = AgentRepository(db_temp)
+                agent = agent_repo.get_agent(session['agent_id'])
+                if agent and not agent.allow_attachments:
+                    await sio.emit('error', {
+                        'error': 'Attachments are not allowed for this agent',
+                        'type': 'validation_error'
+                    }, room=sid, namespace='/widget')
+                    return
+                
+                # Get allowed attachment types for this agent
+                allowed_types = FileUploadService.get_allowed_types_for_agent(
+                    agent.allowed_attachment_types if agent else None
+                )
+                friendly_types = FileUploadService.get_friendly_allowed_types_message(allowed_types)
+                
+                # Check if chat is handed over to human agent
+                # Check if there's any agent message in the conversation
+                from app.models import ChatHistory
+                agent_message_exists = db_temp.query(ChatHistory).filter(
+                    ChatHistory.session_id == session_id,
+                    ChatHistory.message_type == 'agent'
+                ).first()
+                
+                if not agent_message_exists:
+                    await sio.emit('error', {
+                        'error': 'Attachments are only available when the chat is handed over to a human agent',
+                        'type': 'validation_error'
+                    }, room=sid, namespace='/widget')
+                    return
+                
+                # Upload each file with security validation
+                for file_data in files:
+                    try:
+                        uploaded_file = await FileUploadService.upload_file(
+                            file_data=file_data,
+                            org_id=org_id,
+                            customer_id=customer_id,
+                            allowed_types=allowed_types
+                        )
+                        uploaded_files.append(uploaded_file)
+                    except ValueError as val_err:
+                        # Validation error
+                        logger.error(f"File validation error: {str(val_err)}")
+                        await sio.emit('error', {
+                            'error': str(val_err),
+                            'type': 'validation_error',
+                            'allowed_types': friendly_types
+                        }, room=sid, namespace='/widget')
+                        return
+                    except Exception as upload_err:
+                        logger.error(f"Error uploading file: {str(upload_err)}")
+                        await sio.emit('error', {
+                            'error': f"Failed to upload file: {file_data.get('filename', 'unknown')}",
+                            'type': 'upload_error'
+                        }, room=sid, namespace='/widget')
+                        return
+            finally:
+                db_temp.close()
+
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+                
+        # Try to get existing active session
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id,
+            agent_id=session['agent_id']
+        )
+
+        # Check message limit from session
+        if HAS_ENTERPRISE and session.get('message_limit_reached') and active_session and active_session.user_id is None:
+            logger.error(f"Message limit reached")
+            await sio.emit('error', {
+                    'error': 'Unable to process your message. Please contact support.',
+                    'type': 'message_limit_exceeded'
+            }, to=sid, namespace='/widget')
+            return
+
+        if not active_session:
+            # Check if there's a closed session that can be reopened
+            latest_session = session_repo.get_latest_customer_session(
+                customer_id=customer_id
+            )
+            
+            if latest_session and latest_session.status == SessionStatus.CLOSED:
+                # Reopen the closed session if it matches the current session ID
+                if str(latest_session.session_id) == session_id:
+                    success = session_repo.reopen_closed_session(session_id)
+                    if success:
+                        # Refresh the session data
+                        active_session = session_repo.get_session(session_id)
+                        logger.info(f"Reopened closed session {session_id} for customer {customer_id}")
+                    else:
+                        raise ValueError("Failed to reopen closed session")
+                else:
+                    raise ValueError("Session mismatch")
+            else:
+                raise ValueError("No active session found")
+        
+        if str(active_session.session_id) != session_id:
+            raise ValueError("Session mismatch")
+
+        # The session opens when the widget connects, so the chat only really
+        # starts on the customer's first message — notify there, not on connect,
+        # or merely opening the chat window would ping the team.
+        is_first_customer_message = not ChatRepository(db).has_customer_messages(session_id)
+        if is_first_customer_message:
+            await notify_new_chat(db, active_session)
+
+        # A human-only agent answers nothing: no model, no workflow, and no
+        # transfer either — the chat was never with the AI, so there is nothing
+        # to hand over. Every automated branch below is gated on this, leaving
+        # the message to fall through to the plain store-and-relay at the end,
+        # exactly like a chat a human already holds. notify_new_chat above has
+        # already told the team it is waiting.
+        # Older sessions predate the cached flag, so default to answering.
+        ai_replies_enabled = session.get('ai_replies_enabled', True)
+        if ai_replies_enabled and active_session.user_id is None:
+            # The socket connection caches the Agent flag, but the canonical
+            # current-turn authority can be unavailable or revoked mid-chat.
+            # Route this inbound through the normal persisted/manual inbox
+            # branch instead of initiating AI inference and silently dropping
+            # the message after its send-authority gate rejects it.
+            from app.services.yance_reply_runtime import ai_auto_capability_denial
+            live_agent = (
+                AgentRepository(db).get_agent(active_session.agent_id)
+                if active_session.agent_id else None
+            )
+            denial = (
+                "ai_auto_permission_revoked"
+                if not live_agent or not live_agent.ai_replies_enabled
+                else ai_auto_capability_denial(active_session)
+            )
+            if denial:
+                logger.info("AI_AUTO unavailable for widget inbound: %s", denial)
+                ai_replies_enabled = False
+        if active_session.workflow_id and active_session.user_id is None:
+            # Workflow sends multiple raw Socket.IO messages outside the
+            # canonical AI_AUTO message_delivery/idempotence boundary.
+            # Fail closed to receive-and-relay until parity is implemented.
+            ai_replies_enabled = False
+
+        # Check if agent uses workflow and no human agent has taken over
+        if ai_replies_enabled and active_session.workflow_id and active_session.user_id is None:
+            widget_ai_auto_path = True
+            await _emit_bot_typing(session_id)
+            # Handle workflow chat using the dedicated service
+            workflow_chat_service = WorkflowChatService(db)
+            response = await workflow_chat_service.handle_workflow_chat(
+                active_session=active_session,
+                message=message,
+                session_id=session_id,
+                org_id=org_id,
+                customer_id=customer_id,
+                session=session,
+                sio=sio,
+                namespace='/widget',
+                source=session.get('source')
+            )
+            
+            # If response is None, it means a form was displayed and no regular response should be sent
+            if response is None:
+                return
+            
+            # Workflow transfer chat is a machine message, never an ungated
+            # control event. The normal final commitment below owns its emit.
+        elif ai_replies_enabled and active_session.status == SessionStatus.OPEN and active_session.user_id is None: # open and user has not taken over
+            widget_ai_auto_path = True
+            await _emit_bot_typing(session_id)
+            logger.debug(f"Initializing chat agent for model {session['ai_config'].model_type}")
+            # Initialize chat agent with async factory method for MCP tools support
+            chat_agent = await ChatAgent.create_async(
+                api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+                model_name=session['ai_config'].model_name,
+                model_type=session['ai_config'].model_type,
+                base_url=(session['ai_config'].settings or {}).get('base_url'),
+                fallback_model_name=(session['ai_config'].settings or {}).get('fallback_model_name'),
+                reasoning_strength=(session['ai_config'].settings or {}).get('reasoning_strength'),
+                org_id=org_id,
+                agent_id=session['agent_id'],
+                customer_id=customer_id,
+                session_id=session_id,
+                source=session.get('source')
+            )
+            try:
+                # Get response from ai agent (this already handles end chat internally)
+                response = await chat_agent.get_response(
+                    message=message,
+                    session_id=chat_agent.agent.session_id,
+                    org_id=org_id,
+                    agent_id=session['agent_id'],
+                    customer_id=customer_id,
+                    require_auto_send_authority=True)
+            finally:
+                await chat_agent.safe_cleanup_mcp_tools()
+        elif active_session.status == SessionStatus.TRANSFERRED and active_session.user_id is None: # transferred and user has not taken over
+            await _emit_bot_typing(session_id)
+            logger.debug(f"Transferring chat to human for session {session_id}")
+            # Get response from agent transfer ai agent
+            chat_repo = ChatRepository(db)
+            user_msg = chat_repo.create_message({
+                "message": message,
+                "message_type": "user",
+                "session_id": session_id,
+                "organization_id": org_id,
+                "agent_id": session['agent_id'],
+                "customer_id": customer_id,
+            })
+            
+            # Attach uploaded files to the user message
+            if uploaded_files:
+                from app.models import FileAttachment
+                for file_info in uploaded_files:
+                    file_attachment = FileAttachment(
+                        file_url=file_info['file_url'],
+                        filename=file_info['filename'],
+                        content_type=file_info['content_type'],
+                        file_size=file_info['size'],
+                        chat_history_id=user_msg.id,
+                        organization_id=org_id,
+                        uploaded_by_customer_id=customer_id
+                    )
+                    db.add(file_attachment)
+                db.commit()
+            chat_history = []
+            chat_history = await chat_repo.get_session_history(session_id)
+            jira_repo = JiraRepository(db)
+            agent_data = jira_repo.get_agent_with_jira_config(session['agent_id']) if session['agent_id'] else None
+            if agent_data is not None and getattr(agent_data, 'groups', None):
+                availability_response = await get_agent_availability_response(
+                    agent=agent_data,
+                    customer_id=customer_id,
+                    chat_history=chat_history,
+                    db=db,
+                    api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+                    model_name=session['ai_config'].model_name,
+                    model_type=session['ai_config'].model_type,
+                    base_url=(session['ai_config'].settings or {}).get('base_url'),
+                    session_id=session_id
+                )
+            else:
+                # No group queue configured. The availability agent apologises
+                # that it is "unable to transfer the chat", which is untrue
+                # here — the chat is queued and shows in the inbox as waiting.
+                # Only reachable now that a chat can be queued without a group:
+                # human-only agents, and Hand to my team.
+                availability_response = {"message": QUEUED_FOR_HUMAN_NOTICE}
+
+                # Create ChatResponse object
+            response_content = ChatResponse(
+                message=availability_response["message"],
+                transfer_to_human=True,
+                transfer_reason=None,
+                transfer_description=None,
+                end_chat=False,
+                request_rating=False,
+                create_ticket=False
+            )
+                
+            # Store AI response with transfer status
+            chat_repo.create_message({
+                "message": response_content.message,
+                "message_type": "bot",
+                "session_id": session_id,
+                "organization_id": org_id,  
+                "agent_id": session['agent_id'],
+                "customer_id": customer_id,
+                "attributes": {
+                    "transfer_to_human": response_content.transfer_to_human,
+                    "transfer_reason": response_content.transfer_reason.value if response_content.transfer_reason else None,
+                    "transfer_description": response_content.transfer_description,
+                    "end_chat": response_content.end_chat,
+                    "end_chat_reason": response_content.end_chat_reason.value if response_content.end_chat_reason else None,
+                    "end_chat_description": response_content.end_chat_description,
+                    "request_rating": response_content.request_rating,
+                    "shopify_output": response_content.shopify_output
+                                    }
+                })
+            response = response_content
+        elif active_session.workflow_id and active_session.user_id is not None:
+            # Workflow session but human agent has taken over - handle like regular human takeover
+            chat_repo = ChatRepository(db)
+            user_msg = chat_repo.create_message({
+                "message": message,
+                "message_type": "user",
+                "session_id": session_id,
+                "organization_id": org_id,  
+                "agent_id": session['agent_id'],
+                "customer_id": customer_id,
+                "user_id": active_session.user_id,
+            })
+            
+            # Attach uploaded files to the user message
+            if uploaded_files:
+                from app.models import FileAttachment
+                for file_info in uploaded_files:
+                    file_attachment = FileAttachment(
+                        file_url=file_info['file_url'],
+                        filename=file_info['filename'],
+                        content_type=file_info['content_type'],
+                        file_size=file_info['size'],
+                        chat_history_id=user_msg.id,
+                        organization_id=org_id,
+                        uploaded_by_customer_id=customer_id
+                    )
+                    db.add(file_attachment)
+                db.commit()
+            # Get session data to find assigned user
+            session_data = session_repo.get_session(session_id)
+            user_id = str(session_data.user_id) if session_data and session_data.user_id else None
+            timestamp = format_datetime(datetime.datetime.now())
+            
+            # Prepare attachments data if files were uploaded
+            attachments_data = []
+            if uploaded_files:
+                for file_info in uploaded_files:
+                    file_url = file_info['file_url']
+
+                    # Generate S3 signed URL if S3 storage is enabled
+                    if settings.S3_FILE_STORAGE:
+                        try:
+                            file_url = await get_s3_signed_url(file_url)
+                        except Exception as e:
+                            logger.error(f"Error generating signed URL for attachment: {str(e)}")
+
+                    attachments_data.append({
+                        'filename': file_info['filename'],
+                        'file_url': file_url,
+                        'content_type': file_info['content_type'],
+                        'file_size': file_info['size']
+                    })
+
+            if user_id:
+                # Also emit to user-specific room
+                user_room = f"user_{user_id}"
+                await sio.emit('chat_reply', {
+                    'message': message,
+                    'message_id': user_msg.id,
+                    'type': 'user_message',
+                    'transfer_to_human': False,
+                    'session_id': session_id,
+                    'created_at': timestamp,
+                    'attachments': attachments_data if attachments_data else None
+                }, room=user_room, namespace='/agent')
+
+            # Emit to both session room and user's personal room
+            await sio.emit('chat_reply', {
+                'message': message,
+                'message_id': user_msg.id,
+                'type': 'user_message',
+                'transfer_to_human': False,
+                'session_id': session_id,
+                'timestamp': timestamp,
+                'attachments': attachments_data if attachments_data else None
+            }, room=session_id, namespace='/agent')    
+
+            return # don't do anything further - human agent handles the conversation
+        else:
+            chat_repo = ChatRepository(db)
+            user_msg = chat_repo.create_message({
+                "message": message,
+                "message_type": "user",
+                "session_id": session_id,
+                "organization_id": org_id,  
+                "agent_id": session['agent_id'],
+                "customer_id": customer_id,
+                "user_id": active_session.user_id,
+            })
+            
+            # Attach uploaded files to the user message
+            if uploaded_files:
+                from app.models import FileAttachment
+                for file_info in uploaded_files:
+                    file_attachment = FileAttachment(
+                        file_url=file_info['file_url'],
+                        filename=file_info['filename'],
+                        content_type=file_info['content_type'],
+                        file_size=file_info['size'],
+                        chat_history_id=user_msg.id,
+                        organization_id=org_id,
+                        uploaded_by_customer_id=customer_id
+                    )
+                    db.add(file_attachment)
+                db.commit()
+            # Get session data to find assigned user
+            session_data = session_repo.get_session(session_id)
+            user_id = str(session_data.user_id) if session_data and session_data.user_id else None
+            timestamp = format_datetime(datetime.datetime.now())
+            
+            # Prepare attachments data if files were uploaded
+            attachments_data = []
+            if uploaded_files:
+                for file_info in uploaded_files:
+                    file_url = file_info['file_url']
+
+                    # Generate S3 signed URL if S3 storage is enabled
+                    if settings.S3_FILE_STORAGE:
+                        try:
+                            file_url = await get_s3_signed_url(file_url)
+                        except Exception as e:
+                            logger.error(f"Error generating signed URL for attachment: {str(e)}")
+
+                    attachments_data.append({
+                        'filename': file_info['filename'],
+                        'file_url': file_url,
+                        'content_type': file_info['content_type'],
+                        'file_size': file_info['size']
+                    })
+
+            if user_id:
+                # Also emit to user-specific room
+                user_room = f"user_{user_id}"
+                await sio.emit('chat_reply', {
+                    'message': message,
+                    'message_id': user_msg.id,
+                    'type': 'user_message',
+                    'transfer_to_human': False,
+                    'session_id': session_id,
+                    'created_at': timestamp,
+                    'attachments': attachments_data if attachments_data else None
+                }, room=user_room, namespace='/agent')
+
+
+            # Emit to both session room and user's personal room
+            await sio.emit('chat_reply', {
+                'message': message,
+                'message_id': user_msg.id,
+                'type': 'user_message',
+                'transfer_to_human': False,
+                'session_id': session_id,
+                'timestamp': timestamp,
+                'attachments': attachments_data if attachments_data else None
+            }, room=session_id, namespace='/agent')    
+
+            # Nothing is going to answer this on its own, so acknowledge once —
+            # otherwise the visitor sends into what looks like a dead widget.
+            # Only on the opening message: after that the thread is visibly a
+            # conversation with people in it.
+            if is_first_customer_message and not ai_replies_enabled:
+                await notify_customer(db, active_session, HUMAN_ONLY_ACK,
+                                      channels_only=False)
+
+            return # don't do anything if the session is closed or the user has already taken over
+        
+        # A late manual takeover, permission change, or newer inbound
+        # turn invalidates this AI_AUTO result before bot persistence/delivery.
+        if 'response' in locals() and getattr(response, '_auto_abort_reason', None):
+            logger.info(
+                "Aborted stale AI_AUTO widget reply before delivery: %s",
+                response._auto_abort_reason,
+            )
+            return
+
+        # Only emit response if we have a response object and message
+        if 'response' in locals() and response.message:
+            # Emit response to the specific room
+            response_payload = {
+                'message': response.message,
+                'type': 'chat_response',
+                'session_id': session_id,
+                'transfer_to_human': response.transfer_to_human,
+                'end_chat': response.end_chat,
+                'end_chat_reason': response.end_chat_reason.value if response.end_chat_reason else None,
+                'end_chat_description': response.end_chat_description,
+                'request_rating': response.request_rating,
+                # Initialize shopify_output to None. It will be populated if data exists.
+                'shopify_output': None,
+                # Knowledge-base citations (rendering is gated client-side by the agent's
+                # show_citations customization setting).
+                'sources': [s.model_dump() for s in response.sources] if getattr(response, 'sources', None) else None
+            }
+            
+            # Check if the response object has the structured shopify_output field
+            # and assign it directly if it's valid (should be a Pydantic model or dict)
+            if hasattr(response, 'shopify_output') and response.shopify_output:
+                # Assuming response.shopify_output is already the correct 
+                # ShopifyOutputData model instance from ChatResponse
+                # We need to convert it to a dict for JSON serialization
+                try:
+                    response_payload['shopify_output'] = response.shopify_output.model_dump(exclude_unset=True)
+                except AttributeError:
+                     # Handle cases where it might be a plain dict already (less likely but safe)
+                     if isinstance(response.shopify_output, dict):
+                         response_payload['shopify_output'] = response.shopify_output
+                     else:
+                         logger.warning(f"Unexpected type for shopify_output: {type(response.shopify_output)}")
+
+            if locals().get('widget_ai_auto_path', False):
+                if not getattr(response, '_auto_authority_snapshot', None):
+                    logger.warning("AI_AUTO missing durable commitment authority; no recipient emit")
+                    return
+                response_payload['message_id'] = getattr(response, '_stored_message_id', None)
+                response_payload['_ai_auto_authority'] = response._auto_authority_snapshot
+                response_payload['yance_ai_auto'] = True
+                auto_delivery = await deliver_to_customer(db, active_session, response_payload)
+                if not auto_delivery.ok:
+                    logger.info("AI_AUTO widget commitment denied: %s", auto_delivery.reason)
+                    return
+                # Terminal workflow transfer/close owns its durable pending
+                # intent on the same ChatHistory row, not this socket process.
+                if getattr(response, "_workflow_terminal_intent", None):
+                    await apply_pending_workflow_terminal_control(
+                        db, active_session, response_payload["message_id"])
+            else:
+                # Human-assisted workflow forms and prior compatibility behavior.
+                await sio.emit('chat_response', response_payload, room=session_id, namespace='/widget')
+
+            # On human handoff, optionally collect the visitor's contact details (email/name)
+            # so the human agent can follow up. Fires for both a live transfer and the
+            # no-agents/ticket case (request_contact). Only asks for enabled + missing fields.
+            if response.transfer_to_human or getattr(response, 'request_contact', False):
+                try:
+                    from app.services.contact_capture import build_handoff_contact_form
+                    agent_repo = AgentRepository(db)
+                    handoff_agent = agent_repo.get_agent(session['agent_id'])
+                    customer = CustomerRepository(db).get_by_id(customer_id)
+                    if handoff_agent and customer:
+                        contact_form = build_handoff_contact_form(
+                            customer,
+                            collect_email=getattr(handoff_agent, 'handoff_collect_email', True),
+                            collect_name=getattr(handoff_agent, 'handoff_collect_name', True),
+                        )
+                        if contact_form:
+                            await sio.emit('display_form', {
+                                'form_data': contact_form,
+                                'session_id': session_id,
+                            }, room=session_id, namespace='/widget')
+                except Exception as contact_err:
+                    logger.error(f"Failed to emit handoff contact form: {contact_err}")
+
+            # Lead capture: the agent collected the details conversationally and set
+            # request_lead_capture (like transfer_to_human). Persist the structured
+            # lead_data + AI summary — no form. Skipped on transfer/handoff (the elif
+            # above takes precedence), but NOT on end_chat: the model naturally captures
+            # and signs off in the same turn, and this runs before the close block below.
+            # record_lead_capture enforces valid-email + consent and captures once.
+            elif getattr(response, 'request_lead_capture', False):
+                lc_resp = record_lead_from_response(
+                    db, response,
+                    organization_id=org_id,
+                    agent_id=session['agent_id'],
+                    customer_id=customer_id,
+                    session_id=session_id,
+                    page_url=session.get('page_url'),
+                )
+                # If the capture merged this anonymous visitor into an existing
+                # customer (email already known), repoint the live socket session
+                # so the rest of this conversation writes to the merged customer.
+                # Isolated so a session-store failure can't skip the end_chat
+                # close block below.
+                if lc_resp is not None and str(lc_resp.customer_id) != str(customer_id):
+                    try:
+                        session['customer_id'] = str(lc_resp.customer_id)
+                        await sio.save_session(sid, session, namespace='/widget')
+                        logger.info(
+                            f"Lead capture merged customer {customer_id} -> {lc_resp.customer_id}")
+                    except Exception as merge_err:
+                        logger.error(f"Failed to repoint socket session after merge: {merge_err}")
+
+            # If end_chat is true, close the session
+            if response.end_chat and not (
+                    locals().get('widget_ai_auto_path', False)
+                    and getattr(response, "_workflow_terminal_intent", None)):
+                try:
+                    session_repo = SessionToAgentRepository(db)
+                    # Close the session with end_chat reason and description
+                    session_repo.close_session(
+                        session_id=session_id,
+                        reason=response.end_chat_reason.value if response.end_chat_reason else None,
+                        description=response.end_chat_description
+                    )
+                    logger.info(f"Session {session_id} closed due to end_chat with reason: {response.end_chat_reason}")
+                except Exception as close_error:
+                    logger.error(f"Error closing session {session_id}: {str(close_error)}")
+
+    except Exception as e:
+        logger.error(f"Widget chat error for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Unable to process your request, please try again later.',
+            'type': 'chat_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('get_chat_history', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def get_widget_chat_history(sid):
+    db = None
+    try:
+        logger.info(f"Getting chat history for sid {sid}")
+        # Get session data
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        db = next(get_db())
+        
+        # Get active session using new repository
+        session_repo = SessionToAgentRepository(db)
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id,
+            agent_id=session['agent_id']
+        )
+
+        if not active_session:
+            logger.info("No active session found, returning empty history")
+            await sio.emit('chat_history', {
+                'messages': [],
+                'type': 'chat_history'
+            }, to=sid, namespace='/widget')
+            return
+
+        # Recovery runs through the SAME final authority gate and exact
+        # canonical bot row before history can expose an AI_AUTO intent.
+        await recover_pending_web_auto_messages(db, active_session)
+        # Also recover the direct-final ACK-success crash gap (no deferred tail).
+        await resume_pending_workflow_terminal_controls(db, active_session)
+        # Advance deferred workflow chat ONLY after prior canonical ACK.
+        for _ in range(16):  # bounded by maximum workflow node progression
+            advanced = await resume_deferred_workflow_messages(db, active_session)
+            if not advanced:
+                break
+        # Covers a final child produced by an intermediate continuation.
+        await resume_pending_workflow_terminal_controls(db, active_session)
+
+        # Get chat history for active session
+        chat_repo = ChatRepository(db)
+        messages = await chat_repo.get_session_history(
+            session_id=active_session.session_id
+        )
+
+        # Convert datetime to ISO format string
+        formatted_messages = []
+        for msg in messages:
+            attrs = msg.attributes or {}
+            if attrs.get("delivery_status"):
+                continue
+            if (attrs.get("ai_auto_pending") or attrs.get("ai_auto_authority")) and (
+                    (attrs.get("provider_delivery") or {}).get("state") != "succeeded"):
+                continue
+            msg_dict = {
+                'id': msg.id,
+                'message': msg.message,
+                'message_type': msg.message_type,
+                'timestamp': format_datetime(msg.created_at),
+                'attributes': msg.attributes,
+                'user_name': msg.user.full_name if msg.user else None,
+                'agent_name': msg.agent.display_name or msg.agent.name if msg.agent else None
+            }
+            
+            # Add attachments with file info if they exist
+            if msg.attachments:
+                attachments = []
+                for attachment in msg.attachments:
+                    att_dict = {
+                        'id': attachment.id,
+                        'filename': attachment.filename,
+                        'file_url': attachment.file_url,
+                        'content_type': attachment.content_type,
+                        'file_size': attachment.file_size
+                    }
+                    
+                    # Generate signed URL for S3 files
+                    if settings.S3_FILE_STORAGE and attachment.file_url:
+                        try:
+                            from app.core.s3 import get_s3_signed_url
+                            signed_url = await get_s3_signed_url(attachment.file_url)
+                            att_dict['file_url'] = signed_url
+                        except Exception as e:
+                            logger.error(f"Error generating signed URL for attachment {attachment.id}: {str(e)}")
+                            # Use original file_url if signing fails
+                    
+                    attachments.append(att_dict)
+                msg_dict['attachments'] = attachments
+            
+            formatted_messages.append(msg_dict)
+
+        await sio.emit('chat_history', {
+            'messages': formatted_messages,
+            'type': 'chat_history'
+        }, to=sid, namespace='/widget')
+
+    except ValueError as e:
+        logger.error(f"Widget authentication error for sid {sid}: {str(e)}")
+        await sio.emit('error', {
+            'error': 'Authentication failed',
+            'type': 'auth_error'
+        }, to=sid, namespace='/widget')
+    except Exception as e:
+        logger.error(f"Error getting chat history for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to get chat history',
+            'type': 'chat_history_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('refresh_token', namespace='/widget')
+async def handle_refresh_token(sid, data):
+    """Adopt the rotated conversation token for an already-connected socket.
+
+    The socket session holds the token the connection was authenticated with, and
+    that is what a reconnect and any later reader see. Keeping it current means the
+    stored token matches the one the page actually holds, rather than an expiring
+    one nobody can use again.
+    """
+    try:
+        session = await sio.get_session(sid, namespace='/widget')
+        if not session:
+            return
+
+        token = (data or {}).get('conversation_token') if isinstance(data, dict) else None
+        state = conversation_token_service.inspect(token, session.get('widget_id'))
+        if not state.is_live:
+            logger.warning(f"Rejected token refresh for sid {sid}: token is not valid")
+            return
+
+        # A refresh may only extend the connection it already has - never move it to
+        # another customer, which would hand this socket someone else's conversation.
+        if str(state.payload.get('sub')) != str(session.get('customer_id')):
+            logger.warning(f"Rejected token refresh for sid {sid}: customer mismatch")
+            return
+
+        session['conversation_token'] = token
+        await sio.save_session(sid, session, namespace='/widget')
+        logger.debug(f"Conversation token refreshed for sid {sid}")
+    except Exception as e:
+        logger.error(f"Error refreshing token for sid {sid}: {str(e)}")
+
+
+@sio.on('end_chat', namespace='/widget')
+async def handle_end_chat(sid, data):
+    """Handle end chat event from widget client"""
+    try:
+        logger.info(f"End chat requested for sid {sid}")
+        
+        # Get session data
+        session = await sio.get_session(sid, namespace='/widget')
+        if not session:
+            logger.error(f"No session found for sid {sid}")
+            return
+        
+        # Identity was established (and the token verified) at connect time. Closing
+        # the widget must not depend on the token still being live — re-checking it
+        # here is what made "Authentication failed" appear on close (#315).
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        # Get session id and optional end reason/description
+        session_id = session.get('session_id')
+        reason = data.get('reason') if isinstance(data, dict) else None
+        description = data.get('description') if isinstance(data, dict) else None
+        
+        if not session_id:
+            logger.error(f"No session_id in session data for sid {sid}")
+            return
+
+        db = next(get_db())
+        try:
+            # Close the session immediately
+            session_repo = SessionToAgentRepository(db)
+            closed = session_repo.close_session(
+                session_id=session_id,
+                reason=reason,
+                description=description
+            )
+            # close_session swallows its own errors and returns False (an invalid
+            # end-chat reason does exactly that). Confirming regardless would tell the
+            # client the chat ended while the session stayed open, and the next
+            # connect would hand back the same conversation.
+            if not closed:
+                logger.error(f"Session {session_id} was not closed (reason={reason})")
+                await sio.emit('error', {
+                    'error': 'Failed to end chat session',
+                    'type': 'end_chat_error'
+                }, to=sid, namespace='/widget')
+                return
+
+            logger.info(f"Session {session_id} closed by client with reason: {reason}")
+
+            # Confirm to client that chat has ended
+            await sio.emit('chat_ended', {
+                'session_id': session_id,
+                'message': 'Chat session closed'
+            }, room=sid, namespace='/widget')
+
+        except Exception as close_error:
+            logger.error(f"Error closing session {session_id}: {str(close_error)}")
+            await sio.emit('error', {
+                'error': 'Failed to end chat session',
+                'type': 'end_chat_error'
+            }, to=sid, namespace='/widget')
+        finally:
+            db.close()
+    
+    except Exception as e:
+        logger.error(f"Error in end_chat handler for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to process end chat request',
+            'type': 'end_chat_error'
+        }, to=sid, namespace='/widget')
+
+
+# Add connection handler for agent namespace
+@sio.on('connect', namespace='/agent')
+async def agent_connect(sid, environ, auth):
+    try:
+        access_token, user_id, org_id = await authenticate_socket(sid, environ)
+        if not access_token:
+            raise ValueError("Authentication failed")
+        logger.info(f"Authenticated connection for user {
+                    user_id} org {org_id}")
+
+        # Store session data
+        session_data = {
+            'user_id': user_id,
+            'organization_id': org_id
+        }
+        
+        await sio.save_session(sid, session_data, namespace='/agent')
+        
+        
+        return True
+
+    except Exception as e:
+        logger.error(f"Agent connection error for sid {sid}: {str(e)}")
+        return False 
+    
+# Add new socket event handler for agent messages
+@sio.on('agent_message', namespace='/agent')
+async def handle_agent_message(sid, data):
+    db = None
+    try:
+        session = await sio.get_session(sid, namespace='/agent')
+        session_id = data['session_id']
+        
+        logger.info(f"Session ID: {session_id}")
+        if not session_id:
+            raise ValueError("No active session")
+
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+        chat_repo = ChatRepository(db)
+        
+        # Verify session and agent permissions
+        session_data = session_repo.get_session(session_id)
+        if not session_data or str(session_data.user_id) != session.get('user_id'):
+            raise ValueError("Unauthorized")
+
+        raw_client_send_intent_id = data.get("client_send_intent_id")
+        try:
+            client_send_intent_id = uuid.UUID(str(raw_client_send_intent_id))
+        except (TypeError, ValueError, AttributeError):
+            await sio.emit('error', {
+                'error': 'A valid client send intent is required.',
+                'type': 'validation_error',
+                'session_id': session_id,
+            }, to=sid, namespace='/agent')
+            return {
+                "status": "rejected",
+                "client_send_intent_id": (
+                    str(raw_client_send_intent_id)
+                    if raw_client_send_intent_id is not None else None
+                ),
+                "message_id": None,
+                "reason": "invalid_client_send_intent_id",
+            }
+
+        action_kind = "end_chat" if data.get("end_chat") is True else "message"
+
+        # Store the agent's message
+        original_agent_message = data.get('message', '')
+        
+        # Sanitize message to prevent XSS attacks
+        agent_message = sanitize_message(original_agent_message)
+        
+        # If message was stripped to empty but had content before, it was malicious
+        if original_agent_message and not agent_message.strip():
+            logger.warning(f"Blocked malicious message from agent {session.get('user_id')}")
+            await sio.emit('error', {
+                'error': 'Your message contains unsafe content and cannot be sent.',
+                'type': 'validation_error',
+                'session_id': session_id,
+                'client_send_intent_id': str(client_send_intent_id),
+            }, to=sid, namespace='/agent')
+            return {
+                "status": "rejected",
+                "client_send_intent_id": str(client_send_intent_id),
+                "message_id": None,
+                "reason": "unsafe_message",
+            }
+
+        validated_translation_pairing = None
+        raw_translation_pairing = data.get("translation_pairing")
+        if raw_translation_pairing is not None:
+            validated_translation_pairing, pairing_failures = validate_outbound_pairing(
+                agent_message,
+                raw_translation_pairing,
+            )
+            if pairing_failures:
+                logger.warning(
+                    "Rejected stale/invalid translated send for session %s: %s",
+                    session_id,
+                    ",".join(pairing_failures),
+                )
+                await sio.emit('error', {
+                    'error': 'The translation preview is stale or failed integrity checks. Recompute it before sending.',
+                    'type': 'validation_error',
+                    'session_id': session_id,
+                    'client_send_intent_id': str(client_send_intent_id),
+                }, to=sid, namespace='/agent')
+                return {
+                    "status": "rejected",
+                    "client_send_intent_id": str(client_send_intent_id),
+                    "message_id": None,
+                    "reason": "translation_stale_or_invalid",
+                }
+
+        message_data = {
+            "message": agent_message,
+            "message_type": data.get('message_type', "agent"),
+            "session_id": session_id,
+            "organization_id": session.get('organization_id'),
+            "agent_id": session_data.agent_id if session_data.agent_id else None,
+            "customer_id": session_data.customer_id,
+            "user_id": session_data.user_id,
+            "attributes":{
+                "end_chat": data.get('end_chat', False),
+                "request_rating": data.get('request_rating', False),
+                "end_chat_reason": data.get('end_chat_reason', None),
+                "end_chat_description": data.get('end_chat_description', None),
+                "shopify_output": data.get('shopify_output', None),
+                **(
+                    {
+                        OUTBOUND_PAIRING_ATTR_KEY: protect_outbound_pairing(
+                            validated_translation_pairing
+                        )
+                    }
+                    if validated_translation_pairing
+                    else {}
+                ),
+            }
+        }
+
+        try:
+            created_message, intent_claimed = chat_repo.claim_or_get_client_send_intent(
+                message_data,
+                client_send_intent_id=client_send_intent_id,
+                action_kind=action_kind,
+            )
+        except ClientSendIntentConflict:
+            logger.warning(
+                "Rejected conflicting client send intent %s for session %s",
+                client_send_intent_id,
+                session_id,
+            )
+            await sio.emit('error', {
+                'error': 'This send intent belongs to another conversation or action.',
+                'type': 'validation_error',
+                'session_id': session_id,
+                'client_send_intent_id': str(client_send_intent_id),
+            }, to=sid, namespace='/agent')
+            return {
+                "status": "rejected",
+                "client_send_intent_id": str(client_send_intent_id),
+                "message_id": None,
+                "reason": "client_send_intent_conflict",
+            }
+
+        # A canonical row is only the persistence claim, not proof that its
+        # downstream work completed. Serialize completion on that row; a crashed
+        # process releases the database guard so the same intent can resume.
+        was_duplicate = not intent_claimed
+        async with chat_repo.client_send_execution_guard(created_message.id):
+            db.expire(created_message)
+            db.refresh(created_message)
+            if (created_message.attributes or {}).get("client_send_completed"):
+                return {
+                    "status": "accepted",
+                    "client_send_intent_id": str(client_send_intent_id),
+                    "message_id": created_message.id,
+                    "duplicate": True,
+                }
+
+            # Ordinary file bytes are materialized only after the canonical
+            # ChatHistory claim is durable. A recovery replay first reuses any
+            # matching FileAttachment already linked to this exact message.
+            files = data.get('files', [])
+            file_repo = FileAttachmentRepository(db)
+            attachment_ids = data.get("attachment_ids") or []
+            if files:
+                org_id = session.get('organization_id')
+                user_id = session.get('user_id')
+                agent_repo = AgentRepository(db)
+                agent = agent_repo.get_agent(session_data.agent_id) if session_data.agent_id else None
+                allowed_types = FileUploadService.get_allowed_types_for_agent(
+                    agent.allowed_attachment_types if agent else None
+                )
+                adopted_id_set = {int(value) for value in attachment_ids}
+                reusable_rows = [
+                    row for row in file_repo.get_attachments_by_chat_history(created_message.id)
+                    if row.id not in adopted_id_set
+                ]
+                reused_ids: set[int] = set()
+
+                for file_index, file_data in enumerate(files):
+                    source_filename = str(file_data.get("filename") or "")
+                    source_content_type = str(file_data.get("content_type") or "application/octet-stream")
+                    try:
+                        source_size = int(file_data.get("size") or 0)
+                    except (TypeError, ValueError):
+                        source_size = 0
+                    reusable = next((
+                        row for row in reusable_rows
+                        if row.id not in reused_ids
+                        and row.filename == source_filename
+                        and row.content_type == source_content_type
+                        and (source_size <= 0 or row.file_size == source_size)
+                    ), None)
+                    if reusable is not None:
+                        reused_ids.add(reusable.id)
+                        continue
+
+                    try:
+                        uploaded_file = await FileUploadService.upload_file(
+                            file_data=file_data,
+                            org_id=org_id,
+                            user_id=user_id,
+                            allowed_types=allowed_types,
+                            storage_identity=(
+                                f"client-send-{client_send_intent_id.hex}-{file_index}"
+                            ),
+                        )
+                        created_attachment = file_repo.create_attachment(
+                            file_url=uploaded_file["file_url"],
+                            filename=uploaded_file["filename"],
+                            content_type=uploaded_file["content_type"],
+                            file_size=int(uploaded_file["size"]),
+                            organization_id=uuid.UUID(str(org_id)),
+                            chat_history_id=created_message.id,
+                            uploaded_by_user_id=(
+                                uuid.UUID(str(user_id)) if user_id else None
+                            ),
+                        )
+                        reused_ids.add(created_attachment.id)
+                    except ValueError as val_err:
+                        logger.error(f"File validation error: {str(val_err)}")
+                        await sio.emit('error', {
+                            'error': str(val_err),
+                            'type': 'validation_error',
+                            'session_id': session_id,
+                            'client_send_intent_id': str(client_send_intent_id),
+                        }, to=sid, namespace='/agent')
+                        return {
+                            "status": "rejected",
+                            "client_send_intent_id": str(client_send_intent_id),
+                            "message_id": created_message.id,
+                            "reason": "file_validation_error",
+                        }
+                    except Exception as upload_err:
+                        logger.error(f"Error uploading file: {str(upload_err)}")
+                        await sio.emit('error', {
+                            'error': f"Failed to upload file: {file_data.get('filename', 'unknown')}",
+                            'type': 'upload_error',
+                            'session_id': session_id,
+                            'client_send_intent_id': str(client_send_intent_id),
+                        }, to=sid, namespace='/agent')
+                        return {
+                            "status": "rejected",
+                            "client_send_intent_id": str(client_send_intent_id),
+                            "message_id": created_message.id,
+                            "reason": "file_upload_error",
+                        }
+
+            # Pre-generated FileAttachment rows are an idempotent link operation.
+            # Replaying the same ids into the same message is safe and creates no copy.
+            if attachment_ids:
+                session_user_id = session.get('user_id')
+                adopted_files = file_repo.adopt_attachments(
+                    attachment_ids=attachment_ids,
+                    chat_history_id=created_message.id,
+                    organization_id=uuid.UUID(str(session.get('organization_id'))),
+                    uploaded_by_user_id=uuid.UUID(str(session_user_id)) if session_user_id else None,
+                )
+                logger.info(
+                    f"Adopted {len(adopted_files)} existing attachments into agent message "
+                    f"{created_message.id}"
+                )
+
+            # Closing is idempotent across a partial replay: once the canonical
+            # session is CLOSED there is no second mutation to perform.
+            if data.get('end_chat') is True:
+                current_session = session_repo.get_session(session_id)
+                if current_session and current_session.status != SessionStatus.CLOSED:
+                    logger.info(f"Agent ended chat session {session_id}")
+                    session_repo.update_session_status(uuid.UUID(str(session_id)), "CLOSED")
+
+
+            # Emit to widget clients
+            response_payload = {
+                'message': data['message'],
+                'message_id': created_message.id,
+                'client_send_intent_id': str(client_send_intent_id),
+                'type': 'agent_message',
+                'message_type': data.get('message_type', 'agent'),
+                'end_chat': data.get('end_chat', False),
+                'request_rating': data.get('request_rating', False),
+                'end_chat_reason': data.get('end_chat_reason', None),
+                'end_chat_description': data.get('end_chat_description', None),
+                'shopify_output': data.get('shopify_output', False)
+            }
+
+            # Add individual product fields if shopify_output is true
+            if response_payload['shopify_output']:
+                response_payload.update({
+                    'product_id': data.get('product_id'),
+                    'product_title': data.get('product_title'),
+                    'product_description': data.get('product_description'),
+                    'product_handle': data.get('product_handle'),
+                    'product_inventory': data.get('product_inventory'),
+                    'product_price': data.get('product_price'),
+                    'product_currency': data.get('product_currency'),
+                    'product_image': data.get('product_image'),
+                })
+
+            # Project from canonical FileAttachment rows, not transient locals, so
+            # a recovery replay reconstructs exactly the same outbound payload.
+            canonical_files = file_repo.get_attachments_by_chat_history(created_message.id)
+            if canonical_files:
+                attachments_data = []
+                for item in canonical_files:
+                    file_url = item.file_url
+                    if settings.S3_FILE_STORAGE:
+                        try:
+                            file_url = await get_s3_signed_url(file_url)
+                        except Exception as e:
+                            logger.error(f"Error generating signed URL for attachment: {str(e)}")
+                    attachments_data.append({
+                        'filename': item.filename,
+                        'file_url': file_url,
+                        'content_type': item.content_type,
+                        'file_size': item.file_size
+                    })
+                response_payload['attachments'] = attachments_data
+
+            delivery = await deliver_to_customer(db, session_data, response_payload)
+            if delivery.ok and not was_duplicate:
+                # Learning is evidence only and happens after canonical delivery
+                # succeeds.  It never creates a second send or delivery path.
+                finalize_successful_send_learning(db, created_message.id)
+            if not delivery.ok:
+                if delivery.reason == 'window_expired':
+                    error_message = (
+                        "The customer's messaging window has expired — "
+                        "send an approved template message to re-open the conversation."
+                        if delivery.can_template else
+                        "The customer's messaging window has expired; this message could not be delivered."
+                    )
+                else:
+                    error_message = 'Message saved but could not be delivered to the customer.'
+                chat_repo.mark_delivery_failed(created_message.id, delivery.reason)
+                await sio.emit('error', {
+                    'error': error_message,
+                    'type': 'delivery_error',
+                    'session_id': session_id,
+                    'client_send_intent_id': str(client_send_intent_id),
+                    'message_id': created_message.id,
+                    # Lets the inbox offer the template action only when sending one
+                    # would actually reopen the conversation.
+                    'can_template': delivery.can_template,
+                }, to=sid, namespace='/agent')
+
+            # Any returned DeliveryResult is a terminal outcome for this logical
+            # send (success, deterministic failure, or ambiguity). Mark completion
+            # only after all required secondary effects reached that outcome.
+            chat_repo.mark_client_send_completed(created_message.id)
+            return {
+                "status": "accepted",
+                "client_send_intent_id": str(client_send_intent_id),
+                "message_id": created_message.id,
+                "duplicate": was_duplicate,
+                "delivery_ok": bool(delivery.ok),
+                "delivery_reason": delivery.reason,
+            }
+
+    except Exception as e:
+        logger.error(f"Agent message error for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        ack_intent_id = data.get("client_send_intent_id") if isinstance(data, dict) else None
+        await sio.emit('error', {
+            'error': 'Failed to send message',
+            'type': 'message_error',
+            'session_id': data.get('session_id') if isinstance(data, dict) else None,
+            'client_send_intent_id': ack_intent_id,
+        }, to=sid, namespace='/agent')
+        return {
+            "status": "rejected",
+            "client_send_intent_id": ack_intent_id,
+            "message_id": (
+                created_message.id
+                if "created_message" in locals() and created_message is not None
+                else None
+            ),
+            "reason": "message_error",
+        }
+    finally:
+        if db:
+            db.close()
+
+# Add handlers for room management
+@sio.on('join_room', namespace='/agent')
+async def handle_join_room(sid, data):
+    db = None
+    try:
+        session = await sio.get_session(sid, namespace='/agent')
+        session_id = data.get('session_id')
+        if not session_id:
+            raise ValueError("No session ID provided")
+
+        # Handle user-specific rooms
+        if session_id.startswith('user_'):
+            user_id = session_id.split('_')[1]
+            if str(session.get('user_id')) != user_id:
+                raise ValueError("Unauthorized to join user room")
+            await sio.enter_room(sid, session_id, namespace='/agent')
+            logger.info(f"Agent {user_id} joined their user room")
+            return
+
+        # Handle per-org ticket rooms (live ticket_update events)
+        if session_id.startswith('org_tickets_'):
+            org_id = session_id.removeprefix('org_tickets_')
+            if str(session.get('organization_id')) != org_id:
+                raise ValueError("Unauthorized to join org ticket room")
+            await sio.enter_room(sid, session_id, namespace='/agent')
+            logger.info(f"Agent {session.get('user_id')} joined ticket room for org {org_id}")
+            return
+
+        # Verify this agent has permission to join this room
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+        session_data = session_repo.get_session(session_id)
+        
+        if not session_data:
+            raise ValueError("Invalid session")
+            
+        if str(session_data.user_id) != str(session.get('user_id')):
+            raise ValueError("Unauthorized to join this room")
+
+        # Join the room
+        await sio.enter_room(sid, session_id, namespace='/agent')
+        logger.info(f"Agent {session.get('user_id')} joined room: {session_id}")
+
+
+        # Notify room of join
+        await sio.emit('room_event', {
+            'type': 'join',
+            'user_id': str(session.get('user_id')),
+        }, room=session_id, namespace='/agent')
+
+        # Merge into the existing socket session — replacing it would drop
+        # keys set at connect (organization_id, used by the org ticket room
+        # authorization) and silently break later joins.
+        session_data = {**session, 'session_id': session_id}
+        await sio.save_session(sid, session_data, namespace='/agent')
+
+    except Exception as e:
+        logger.error(f"Error joining room for sid {sid}: {str(e)}")
+        await sio.emit('error', {
+            'error': 'Failed to join room',
+            'type': 'room_error'
+        }, to=sid, namespace='/agent')
+    finally:
+        if db:
+            db.close()
+
+@sio.on('leave_room', namespace='/agent')
+async def handle_leave_room(sid, data):
+    try:
+        session = await sio.get_session(sid, namespace='/agent')
+        if not session:
+            raise ValueError("No active session")
+
+        session_id = data.get('session_id')
+        if not session_id:
+            raise ValueError("No session ID provided")
+
+        # Leave the room
+        await sio.leave_room(sid, session_id, namespace='/agent')
+        logger.info(f"Agent {session.get('user_id')} left room: {session_id}")
+
+        # Notify room of leave
+        await sio.emit('room_event', {
+            'type': 'leave',
+            'user_id': str(session.get('user_id')),
+        }, room=session_id, namespace='/agent')
+
+    except Exception as e:
+        logger.error(f"Error leaving room for sid {sid}: {str(e)}")
+        await sio.emit('error', {
+            'error': 'Failed to leave room',
+            'type': 'room_error'
+        }, to=sid, namespace='/agent')    
+
+
+@sio.on('taken_over', namespace='/agent')
+async def handle_taken_over(sid, data):
+    logger.info(f"Agent {data['user_name']} has taken over chat {data['session_id']}")
+    await sio.emit('handle_taken_over', data, room=data['session_id'] , namespace='/widget')
+
+@sio.on('submit_rating', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def handle_rating_submission(sid, data):
+    """Handle rating submission from widget"""
+    db = None
+    try:
+        # Identity was established (and the token verified) at connect time.
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        session_id = session['session_id']
+
+        # Validate rating data
+        rating = data.get('rating')
+        feedback = data.get('feedback')
+        
+        if not rating or not isinstance(rating, int) or rating < 1 or rating > 5:
+            raise ValueError("Invalid rating value")
+
+        if feedback is not None:
+            if not isinstance(feedback, str):
+                raise ValueError("Invalid feedback value")
+            # Same treatment as an inbound chat message: the text is untrusted
+            # and ends up in the agent UI and the ticket activity feed.
+            feedback = sanitize_message(feedback.strip()[:MAX_RATING_FEEDBACK_LENGTH]) or None
+
+        db = next(get_db())
+        
+        # Get session details
+        session_repo = SessionToAgentRepository(db)
+        session_data = session_repo.get_session(session_id)
+        
+        if not session_data:
+            raise ValueError("Session not found")
+
+        # One rating per session — re-rating replaces the previous score.
+        rating_repo = RatingRepository(db)
+        rating_obj = rating_repo.upsert_rating(
+            session_id=session_id,
+            customer_id=customer_id,
+            user_id=session_data.user_id,
+            agent_id=session_data.agent_id,
+            organization_id=org_id,
+            rating=rating,
+            feedback=feedback
+        )
+
+        # Close the CSAT loop if this conversation belongs to a ticket.
+        record_conversation_rating(db, rating_obj)
+
+        # Emit success response
+        await sio.emit('rating_submitted', {
+            'success': True,
+            'message': 'Rating submitted successfully'
+        }, room=sid, namespace='/widget')
+
+        # Also emit to agent room if there's an assigned agent
+        if session_data.user_id:
+            user_room = f"user_{session_data.user_id}"
+            await sio.emit('rating_received', {
+                'session_id': session_id,
+                'rating': rating,
+                'feedback': feedback
+            }, room=user_room, namespace='/agent')
+
+    except ValueError as e:
+        logger.error(f"Rating submission error for sid {sid}: {str(e)}")
+        await sio.emit('error', {
+            'error': str(e),
+            'type': 'rating_error'
+        }, to=sid, namespace='/widget')
+    except Exception as e:
+        logger.error(f"Rating submission error for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to submit rating',
+            'type': 'rating_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('get_workflow_state', namespace='/widget')
+@socket_rate_limit(namespace='/widget') 
+async def handle_get_workflow_state(sid):
+    """Get current workflow state and execute next node if no chat history"""
+    db = None
+    try:
+        logger.info(f"Getting workflow state for sid {sid}")
+        # Identity was established (and the token verified) at connect time.
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        session_id = session['session_id']
+
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+        chat_repo = ChatRepository(db)
+        
+        # Get active session
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id
+        )
+        
+        if not active_session:
+            raise ValueError("No active session found")
+
+        # Check if there's any chat history
+        chat_history = await chat_repo.get_session_history(session_id)
+        has_history = len(chat_history) > 0
+
+        # If agent uses workflow, handle workflow state
+        if active_session.workflow_id:
+            current_node_id = active_session.current_node_id
+            
+            # If no current node and no history - start from beginning by executing workflow
+            if not current_node_id and not has_history:
+                logger.info(f"Starting workflow from beginning for session {session_id}")
+                workflow_service = WorkflowExecutionService(db)
+                workflow_source_id = latest_workflow_source_id(db, session_id)
+                workflow_revision = workflow_context_revision(db, active_session)
+                
+                # Execute workflow to get the starting node
+                workflow_result = await workflow_service.execute_workflow(
+                    session_id=session_id,
+                    user_message=None,  # No user message for initial execution
+                    workflow_id=active_session.workflow_id,
+                    current_node_id=None,  # Start from beginning
+                    workflow_state=active_session.workflow_state or {},
+                    api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+                    model_name=session['ai_config'].model_name,
+                    model_type=session['ai_config'].model_type,
+                    base_url=(session['ai_config'].settings or {}).get('base_url'),
+                    org_id=org_id,
+                    agent_id=session['agent_id'],
+                    customer_id=customer_id,
+                    is_initial_execution=True,
+                    source=session.get('source')
+                )
+                
+                workflow_revision = reconcile_workflow_own_revision(
+                    db, active_session, workflow_revision)
+                if workflow_result.success:
+                    logger.debug(f"Initial workflow result: {workflow_result}")
+                    
+                    # Handle intermediate messages from MESSAGE nodes during automatic execution
+                    if workflow_result.intermediate_messages:
+                        logger.info(f"Found {len(workflow_result.intermediate_messages)} intermediate messages from MESSAGE nodes in initial execution")
+                        for intermediate_message in workflow_result.intermediate_messages:
+                            logger.debug(f"Emitting intermediate message: {intermediate_message}")
+                            
+                            delivery = await deliver_workflow_auto_message(
+                                db, active_session, session_id=session_id,
+                                org_id=org_id, agent_id=session['agent_id'],
+                                customer_id=customer_id, message=intermediate_message,
+                                source_message_id=workflow_source_id,
+                        generation_revision=workflow_revision,
+                                attributes={
+                                    "workflow_execution": True,
+                                    "workflow_id": str(active_session.workflow_id),
+                                    "intermediate_message": True,
+                                    "message_node": True,
+                                    "initial_execution": True,
+                                })
+                            if delivery and delivery.ok:
+                                workflow_revision = workflow_context_revision(db, active_session)
+
+                    # Handle different node types
+                    if workflow_result.form_data:
+                        await sio.emit('workflow_state', {
+                            'type': 'form',
+                            'form_data': workflow_result.form_data,
+                            'session_id': session_id,
+                            'has_history': has_history,
+                            'button_text': 'Start Chat'
+                        }, room=sid, namespace='/widget')
+                        
+                    elif workflow_result.landing_page_data:
+                        await sio.emit('workflow_state', {
+                            'type': 'landing_page',
+                            'landing_page_data': workflow_result.landing_page_data,
+                            'session_id': session_id,
+                            'has_history': has_history,
+                            'button_text': 'Start Chat'
+                        }, room=sid, namespace='/widget')
+                        
+                    elif workflow_result.message:
+                        # Store initial message and emit
+                        chat_repo.create_message({
+                            "message": workflow_result.message,
+                            "message_type": "bot",
+                            "session_id": session_id,
+                            "organization_id": org_id,
+                            "agent_id": session['agent_id'],
+                            "customer_id": customer_id,
+                            "attributes": {
+                                "workflow_execution": True,
+                                "workflow_id": str(active_session.workflow_id),
+                                "initial_message": True
+                            }
+                        })
+                        
+                        await sio.emit('workflow_state', {
+                            'type': 'message',
+                            'message': workflow_result.message,
+                            'session_id': session_id,
+                            'has_history': has_history,
+                            'button_text': 'Continue Conversation'
+                        }, room=sid, namespace='/widget')
+                    else:
+                        await sio.emit('workflow_state', {
+                            'type': 'ready',
+                            'session_id': session_id,
+                            'has_history': has_history,
+                            'button_text': 'Start Chat'
+                        }, room=sid, namespace='/widget')
+                else:
+                    await sio.emit('workflow_state', {
+                        'type': 'error',
+                        'error': workflow_result.error,
+                        'session_id': session_id,
+                        'has_history': has_history,
+                        'button_text': 'Start Chat'
+                    }, room=sid, namespace='/widget')
+            else:
+                # We have a current node - fetch node details and emit them directly
+                logger.info(f"Fetching details for current node {current_node_id} in session {session_id}")
+                
+                try:
+                    from app.repositories.workflow import WorkflowRepository
+                    workflow_repo = WorkflowRepository(db)
+                    workflow = workflow_repo.get_workflow_with_nodes_and_connections(active_session.workflow_id)
+                    
+                    if workflow:
+                        current_node = None
+                        for node in workflow.nodes:
+                            if node.id == current_node_id:
+                                current_node = node
+                                break
+                        
+                        if current_node:
+                            logger.debug(f"Found current node: {current_node.node_type}")
+                            
+                            if current_node.node_type.value == 'form':
+                                # Emit form node details
+                                config = current_node.config or {}
+                                form_data = {
+                                    "title": config.get("form_title", ""),
+                                    "description": config.get("form_description", ""),
+                                    "submit_button_text": config.get("submit_button_text", "Submit"),
+                                    "fields": config.get("form_fields", []),
+                                    "form_full_screen": config.get("form_full_screen", False)
+                                }
+                                
+                                await sio.emit('workflow_state', {
+                                    'type': 'form',
+                                    'form_data': form_data,
+                                    'session_id': session_id,
+                                    'has_history': has_history,
+                                    'button_text': 'Continue Conversation'
+                                }, room=sid, namespace='/widget')
+                                
+                            elif current_node.node_type.value == 'landing_page':
+                                # Emit landing page node details
+                                config = current_node.config or {}
+                                landing_page_data = {
+                                    "heading": config.get("landing_page_heading", "Welcome"),
+                                    "content": config.get("landing_page_content", "Thank you for visiting!")
+                                }
+                                
+                                await sio.emit('workflow_state', {
+                                    'type': 'landing_page',
+                                    'landing_page_data': landing_page_data,
+                                    'session_id': session_id,
+                                    'has_history': has_history,
+                                    'button_text': 'Continue Conversation'
+                                }, room=sid, namespace='/widget')
+                            else:
+                                # For other node types, just emit ready state
+                                await sio.emit('workflow_state', {
+                                    'type': 'ready',
+                                    'session_id': session_id,
+                                    'has_history': has_history,
+                                    'button_text': 'Continue Conversation'
+                                }, room=sid, namespace='/widget')
+                        else:
+                            logger.warning(f"Current node {current_node_id} not found in workflow")
+                            await sio.emit('workflow_state', {
+                                'type': 'ready',
+                                'session_id': session_id,
+                                'has_history': has_history,
+                                'button_text': 'Continue Conversation'
+                            }, room=sid, namespace='/widget')
+                    else:
+                        logger.error(f"Workflow {active_session.workflow_id} not found")
+                        await sio.emit('workflow_state', {
+                            'type': 'error',
+                            'error': 'Workflow not found',
+                            'session_id': session_id,
+                            'has_history': has_history,
+                            'button_text': 'Continue Conversation'
+                        }, room=sid, namespace='/widget')
+                        
+                except Exception as e:
+                    logger.error(f"Error fetching node details: {str(e)}")
+                    await sio.emit('workflow_state', {
+                        'type': 'error',
+                        'error': 'Failed to get workflow state',
+                        'session_id': session_id,
+                        'has_history': has_history,
+                        'button_text': 'Continue Conversation'
+                    }, room=sid, namespace='/widget')
+        else:
+            # No workflow or has history - just return current state
+            await sio.emit('workflow_state', {
+                'type': 'ready',
+                'session_id': session_id,
+                'has_history': has_history,
+                'button_text': 'Start Chat' if not has_history else 'Continue Conversation'
+            }, room=sid, namespace='/widget')
+
+    except Exception as e:
+        logger.error(f"Error getting workflow state for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to get workflow state',
+            'type': 'workflow_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('proceed_workflow', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def handle_proceed_workflow(sid, data):
+    """Proceed to next workflow node after landing page interaction"""
+    db = None
+    try:
+        logger.info(f"Proceeding workflow for sid {sid}")
+        # Identity was established (and the token verified) at connect time.
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        session_id = session['session_id']
+
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+        chat_repo = ChatRepository(db)
+        
+        # Get active session
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id
+        )
+
+        if not active_session or not active_session.workflow_id:
+            raise ValueError("No active workflow session found")
+
+        # Simply update to next node and execute it
+        workflow_service = WorkflowExecutionService(db)
+        workflow_source_id = latest_workflow_source_id(db, session_id)
+        workflow_revision = workflow_context_revision(db, active_session)
+        
+        # Get current node and find next node
+        from app.repositories.workflow import WorkflowRepository
+        workflow_repo = WorkflowRepository(db)
+        workflow = workflow_repo.get_workflow_with_nodes_and_connections(active_session.workflow_id)
+        
+        if not workflow:
+            raise ValueError("Workflow not found")
+        
+        # Find current node
+        current_node = None
+        for node in workflow.nodes:
+            if node.id == active_session.current_node_id:
+                current_node = node
+                break
+        
+        if not current_node:
+            raise ValueError("Current node not found")
+        
+        # Find next node
+        next_node_id = None
+        for connection in current_node.outgoing_connections:
+            next_node_id = connection.target_node_id
+            break
+        
+        if not next_node_id:
+            await sio.emit('workflow_proceeded', {'success': True, 'message': 'End of workflow'}, room=sid, namespace='/widget')
+            return
+        
+        logger.debug(f"Next node ID: {next_node_id}")
+        logger.debug(f"Active session: {active_session}")
+        logger.debug(f"Workflow state: {active_session.workflow_state}")
+        # Update session with next node
+        session_repo.update_workflow_state(session_id, next_node_id, active_session.workflow_state or {})
+        
+        # Execute the next workflow node
+        workflow_result = await workflow_service.execute_workflow(
+            session_id=session_id,
+            user_message=None,
+            workflow_id=active_session.workflow_id,
+            current_node_id=next_node_id,
+            workflow_state=active_session.workflow_state or {},
+            org_id=org_id,
+            agent_id=session['agent_id'],
+            customer_id=customer_id,
+            api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+            model_name=session['ai_config'].model_name,
+            model_type=session['ai_config'].model_type,
+            base_url=(session['ai_config'].settings or {}).get('base_url'),
+            source=session.get('source')
+        )
+        
+        workflow_revision = reconcile_workflow_own_revision(
+            db, active_session, workflow_revision)
+        if workflow_result.success:
+            logger.debug(f"Workflow result: {workflow_result}")
+            
+            # Handle intermediate messages from MESSAGE nodes during automatic execution
+            if workflow_result.intermediate_messages:
+                logger.info(f"Found {len(workflow_result.intermediate_messages)} intermediate messages from MESSAGE nodes")
+                for intermediate_message in workflow_result.intermediate_messages:
+                    logger.debug(f"Emitting intermediate message: {intermediate_message}")
+                    
+                    delivery = await deliver_workflow_auto_message(
+                        db, active_session, session_id=session_id,
+                        org_id=org_id, agent_id=session['agent_id'],
+                        customer_id=customer_id, message=intermediate_message,
+                        source_message_id=workflow_source_id,
+                        generation_revision=workflow_revision,
+                        attributes={
+                            "workflow_execution": True,
+                            "workflow_id": str(active_session.workflow_id),
+                            "intermediate_message": True,
+                            "message_node": True,
+                        })
+                    if delivery and delivery.ok:
+                        workflow_revision = workflow_context_revision(db, active_session)
+
+            # Handle the next node type
+            if workflow_result.form_data:
+                # It's a form node - emit form display
+                await sio.emit('display_form', {
+                    'form_data': workflow_result.form_data,
+                    'session_id': session_id
+                }, room=session_id, namespace='/widget')
+                
+            elif workflow_result.message:
+                delivery = await deliver_workflow_auto_message(
+                    db, active_session, session_id=session_id,
+                    org_id=org_id, agent_id=session['agent_id'],
+                    customer_id=customer_id, message=workflow_result.message,
+                    source_message_id=workflow_source_id,
+                        generation_revision=workflow_revision,
+                    transfer_to_human=workflow_result.transfer_to_human,
+                    end_chat=workflow_result.end_chat,
+                    request_rating=workflow_result.request_rating,
+                    terminal_transfer=workflow_transfer_spec(workflow_result),
+                    attributes={
+                        "workflow_execution": True,
+                        "workflow_id": str(active_session.workflow_id),
+                        "current_node_id": str(workflow_result.next_node_id) if workflow_result.next_node_id else None,
+                    })
+
+            # Emit success
+            await sio.emit('workflow_proceeded', {
+                'success': True
+            }, room=sid, namespace='/widget')
+        else:
+            # Handle error
+            await sio.emit('error', {
+                'error': workflow_result.error or 'Failed to proceed workflow',
+                'type': 'workflow_error'
+            }, to=sid, namespace='/widget')
+
+    except Exception as e:
+        logger.error(f"Error proceeding workflow for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to proceed workflow',
+            'type': 'workflow_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('submit_contact_info', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def handle_contact_info(sid, data):
+    """Handle the inline contact form shown at human handoff (email + optional name).
+
+    Updates the customer record so the human agent can follow up. Non-blocking: the handoff
+    already happened, so failures here never undo the transfer.
+    """
+    db = None
+    try:
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        session_id = session['session_id']
+
+        form_data = data.get('form_data', {}) or {}
+        email = (form_data.get('email') or '').strip()
+        name = (form_data.get('name') or '').strip()
+
+        # Validate email server-side too (the field is required client-side when shown)
+        if email and not validate_email(email):
+            await sio.emit('error', {'error': 'Please enter a valid email address', 'type': 'validation_error'},
+                           room=session_id, namespace='/widget')
+            return
+
+        if not email and not name:
+            return  # nothing to update
+
+        db = next(get_db())
+        customer_repo = CustomerRepository(db)
+        result = customer_repo.update_contact(customer_id, email=email or None, full_name=name or None)
+
+        # The customer row can refuse the address — another customer in the org
+        # already owns it (a visitor returning anonymously, or a shared team
+        # inbox), or it is a channel identity key. Keep it on meta_data so the
+        # agent can still follow up; otherwise the visitor asked to be contacted
+        # and nothing anywhere records how.
+        email_retained = retain_unstored_email(customer_repo, customer_id, email, result)
+
+        # Confirm back to the visitor as a bot message. Retaining counts: from
+        # where they sit they gave us a good address either way, and silence
+        # after submitting the form reads as the form having failed.
+        if result.get('email_updated') or result.get('name_updated') or email_retained:
+            confirm = "Thanks — a teammate will follow up"
+            updated_email = result.get('email') or ''
+            if result.get('email_updated') and updated_email and not CustomerRepository.is_placeholder_email(updated_email):
+                confirm += f" at {updated_email}"
+            elif email_retained:
+                confirm += f" at {email}"
+            confirm += "."
+            await sio.emit('chat_response', {
+                'message': confirm,
+                'type': 'chat_response',
+                'session_id': session_id,
+                'transfer_to_human': False,
+                'end_chat': False,
+            }, room=session_id, namespace='/widget')
+    except Exception as e:
+        logger.error(f"Error handling contact info for sid {sid}: {str(e)}")
+    finally:
+        if db:
+            db.close()
+
+
+@sio.on('submit_form', namespace='/widget')
+@socket_rate_limit(namespace='/widget')
+async def handle_form_submission(sid, data):
+    """Handle form submission from widget"""
+    db = None
+    try:
+        logger.info(f"Submitting form for sid {sid}")
+        # Identity was established (and the token verified) at connect time.
+        session = await sio.get_session(sid, namespace='/widget')
+        widget_id, org_id, customer_id = widget_socket_identity(session)
+        
+        if not widget_id or not org_id:
+            logger.error(f"No authenticated widget session for sid {sid}")
+            await sio.emit('error', {'error': 'Authentication failed', 'type': 'auth_error'}, room=sid, namespace='/widget')
+            return
+
+        session_id = session['session_id']
+
+        # Validate form data
+        form_data = data.get('form_data', {})
+        if not form_data:
+            raise ValueError("No form data provided")
+
+        db = next(get_db())
+        session_repo = SessionToAgentRepository(db)
+        
+        # Get active session
+        active_session = session_repo.get_active_customer_session(
+            customer_id=customer_id
+        )
+
+        if not active_session or not active_session.workflow_id:
+            raise ValueError("No active workflow session found")
+
+        # Get the current form configuration for validation
+        from app.repositories.workflow import WorkflowRepository
+        workflow_repo = WorkflowRepository(db)
+        workflow = workflow_repo.get_workflow_with_nodes_and_connections(active_session.workflow_id)
+        
+        if not workflow:
+            raise ValueError("Workflow not found")
+        
+        # Find the current form node to get field configurations
+        current_node = None
+        for node in workflow.nodes:
+            if node.id == active_session.current_node_id:
+                current_node = node
+                break
+        
+        if current_node and current_node.node_type.value == 'form':
+            # Get form fields configuration from config JSON
+            config = current_node.config or {}
+            form_fields = config.get("form_fields", [])
+            
+            # Validate form data against field configurations
+            validation_errors = validate_form_data(form_fields, form_data)
+            
+            if validation_errors:
+                error_message = "; ".join(validation_errors)
+                logger.error(f"Form validation failed: {error_message}")
+                await sio.emit('error', {
+                    'error': error_message,
+                    'type': 'validation_error'
+                }, to=sid, namespace='/widget')
+                return
+
+        # Submit form through workflow service
+        workflow_service = WorkflowExecutionService(db)
+        workflow_source_id = latest_workflow_source_id(db, session_id)
+        workflow_revision = workflow_context_revision(db, active_session)
+        logger.info(f"Submitting form for sid {sid}")
+        workflow_result = await workflow_service.submit_form(
+            session_id=session_id,
+            form_data=form_data,
+            workflow_id=active_session.workflow_id,
+            org_id=org_id,
+            agent_id=session['agent_id'],
+            customer_id=customer_id,
+            api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+            model_name=session['ai_config'].model_name,
+            model_type=session['ai_config'].model_type,
+            base_url=(session['ai_config'].settings or {}).get('base_url'),
+            source=session.get('source')
+        )
+
+        workflow_revision = reconcile_workflow_own_revision(
+            db, active_session, workflow_revision)
+        if workflow_result.success:
+            # Check if form contains email and update customer if they have @noemail.com email
+            if 'email' in form_data and form_data['email']:
+                submitted_email = form_data['email'].strip()
+                if submitted_email:  # Only process if email is not empty
+                    customer_repo = CustomerRepository(db)
+                    customer = customer_repo.get_by_id(customer_id)
+                    
+                    if customer and customer.email and '@noemail.com' in customer.email:
+                        # Customer has a generated @noemail.com email, update it with the real email
+                        try:
+                            # Check if the new email already exists for another customer in the same organization
+                            existing_customer = customer_repo.get_customer_by_email(submitted_email, org_id)
+                            if not existing_customer:
+                                # Update customer email
+                                old_email = customer.email
+                                customer.email = submitted_email
+                                db.commit()
+                                logger.info(f"Updated customer {customer_id} email from {old_email} to {submitted_email}")
+                            else:
+                                logger.warning(f"Email {submitted_email} already exists for another customer, skipping update")
+                        except Exception as e:
+                            logger.error(f"Failed to update customer email: {str(e)}")
+                            db.rollback()
+            
+            # Store form submission in chat history
+            chat_repo = ChatRepository(db)
+            
+            # Handle intermediate messages from MESSAGE nodes during automatic execution
+            if workflow_result.intermediate_messages:
+                logger.info(f"Found {len(workflow_result.intermediate_messages)} intermediate messages from MESSAGE nodes")
+                for intermediate_message in workflow_result.intermediate_messages:
+                    logger.debug(f"Emitting intermediate message: {intermediate_message}")
+                    
+                    delivery = await deliver_workflow_auto_message(
+                        db, active_session, session_id=session_id,
+                        org_id=org_id, agent_id=session['agent_id'],
+                        customer_id=customer_id, message=intermediate_message,
+                        source_message_id=workflow_source_id,
+                        generation_revision=workflow_revision,
+                        attributes={
+                            "workflow_execution": True,
+                            "workflow_id": str(active_session.workflow_id),
+                            "intermediate_message": True, "message_node": True,
+                        })
+                    if delivery and delivery.ok:
+                        workflow_revision = workflow_context_revision(db, active_session)
+
+            # Check if there's a response message to send
+            if workflow_result.message:
+                delivery = await deliver_workflow_auto_message(
+                    db, active_session, session_id=session_id,
+                    org_id=org_id, agent_id=session['agent_id'],
+                    customer_id=customer_id, message=workflow_result.message,
+                    source_message_id=workflow_source_id,
+                        generation_revision=workflow_revision,
+                    transfer_to_human=workflow_result.transfer_to_human,
+                    end_chat=workflow_result.end_chat,
+                    request_rating=workflow_result.request_rating,
+                    terminal_transfer=workflow_transfer_spec(workflow_result),
+                    attributes={
+                        "workflow_execution": True,
+                        "workflow_id": str(active_session.workflow_id),
+                        "current_node_id": str(workflow_result.next_node_id) if workflow_result.next_node_id else None,
+                    })
+
+            # Emit form submission success
+            await sio.emit('form_submitted', {
+                'success': True,
+                'message': 'Form submitted successfully'
+            }, room=sid, namespace='/widget')
+
+        else:
+            # Handle form submission error
+            await sio.emit('error', {
+                'error': workflow_result.error or 'Form submission failed',
+                'type': 'form_error'
+            }, to=sid, namespace='/widget')
+
+    except ValueError as e:
+        logger.error(f"Form submission error for sid {sid}: {str(e)}")
+        await sio.emit('error', {
+            'error': str(e),
+            'type': 'form_error'
+        }, to=sid, namespace='/widget')
+    except Exception as e:
+        logger.error(f"Form submission error for sid {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        await sio.emit('error', {
+            'error': 'Failed to submit form',
+            'type': 'form_error'
+        }, to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+

@@ -1,0 +1,22 @@
+Reply Brain primitive,Mature owner,Boundary / Yance role
+candidate generation,ChatterMate Agent + model_catalog + structured_output,YANCE_PRODUCT_SEMANTIC_ONLY composition contract
+candidate ranking,ChatterMate model execution,YANCE_PRODUCT_SEMANTIC_ONLY ranking criteria; no ranking engine
+stale detection,ChatHistory/current turn + typing/inbound revision,YANCE_PRODUCT_SEMANTIC_ONLY invalidation contract
+recompute,ChatterMate Agent/model execution,Invoke mature owner again
+text generation,ChatterMate Agent/provider framework,Native
+ASR,whisper.cpp 1.9.4,External mature owner
+TTS / voice clone,CosyVoice3; Chatterbox fallback,External mature owner; qualification required
+image/video generation,ComfyUI 0.38.0,External mature owner
+deterministic image edit,ImageMagick 7.1.2-32,External mature owner
+audio/video transform,FFmpeg 9.0.2,External mature owner
+file attachment,ChatterMate FileAttachment/file services,Native
+media library search,digiKam 9.1.0 optional,Read-only external index; qualification required
+route switch,ChannelAccount + ChannelConversation,Native
+final send,ChannelAdapter/message_delivery,Native single physical send authority
+learning evidence,ChatHistory + Rating + SendResult,Native evidence; no learning DB
+persona version/rollback,SQLAlchemy-Continuum attached to Agent,External versioning primitive; Agent remains current state
+truth/provenance,Graphiti provenance + ChatterMate guardrails,External derived evidence + native policy
+permission,ChatterMate Permission/guardrails + Yance product semantic,No second permission engine
+human-likeness,Yance product semantic over Agent instructions + transport typing,No standalone engine
+no_reply / defer,Yance product semantic; durable defer uses Workflow WAIT,No scheduler
+why-now,Graphiti evidence + ChatterMate model,Projection only

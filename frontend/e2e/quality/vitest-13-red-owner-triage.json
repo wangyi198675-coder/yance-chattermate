@@ -1,0 +1,62 @@
+{
+  "reviewerIndependentObservation": "W377 source audit 2026-10-10",
+  "sourceHeadAtObservation": "b2c173fe6962d91d896120127f317e3d47275774",
+  "summary": {
+    "total": 819,
+    "passed": 806,
+    "failed": 13,
+    "files": 121,
+    "filesFailed": 8
+  },
+  "status": "RED_PENDING_W327_NATIVE_OR_TEST_OWNER_DISPATCH_NO_TEST_DELETION",
+  "failures": [
+    {
+      "file": "src/__tests__/services/api.spec.ts",
+      "count": 2,
+      "owner": "AUTH_OWNER_TEST_CONTRACT",
+      "notes": "Old /login assertions versus single-owner /yance; W327 must approve security semantics; do not reintroduce login"
+    },
+    {
+      "file": "src/__tests__/components/Window124ConversationInteractionAccessibility.spec.ts",
+      "count": 1,
+      "owner": "CONVERSATION_ACCESSIBILITY_OWNER",
+      "notes": "Right-click menu keyboard and disabled affordance may reflect native defect or obsolete test"
+    },
+    {
+      "file": "src/yance/__tests__/NativeHostedYanceStructuralGate.spec.ts",
+      "count": 1,
+      "owner": "NATIVE_SHELL_TEST_OWNER",
+      "notes": "Historical DashboardLayout expectation versus current native frame needs source review"
+    },
+    {
+      "file": "src/yance/__tests__/Window176PersonaStyleGrowth.spec.ts",
+      "count": 1,
+      "owner": "PERSONA_NATIVE_OWNER",
+      "notes": "Settings persona entry mapping requires native owner"
+    },
+    {
+      "file": "src/yance/__tests__/Window273FacebookFrontendTruthCorrection.spec.ts",
+      "count": 4,
+      "owner": "META_NATIVE_PAGE_OWNER",
+      "notes": "Provider connection, subscription, reconnect, scope and failure recovery high-risk native behavior"
+    },
+    {
+      "file": "src/yance/__tests__/Window44FrozenMasterConversationReplyGirlfriendClosure.spec.ts",
+      "count": 1,
+      "owner": "REPLY_GF_COMPOSER_OWNER",
+      "notes": "920x620 frozen composition contract or source regression"
+    },
+    {
+      "file": "src/yance/__tests__/Window46SettingsProductParity.spec.ts",
+      "count": 2,
+      "owner": "SETTINGS_PRODUCT_OWNER",
+      "notes": "Owner-facing wording/disabled state nonfake correctness"
+    },
+    {
+      "file": "src/__tests__/views/settings/Window239LineStatusLifecycle.spec.ts",
+      "count": 1,
+      "owner": "LINE_CHANNEL_ACCOUNT_OWNER",
+      "notes": "Native LINE account status reconciliation and lifecycle"
+    }
+  ]
+}

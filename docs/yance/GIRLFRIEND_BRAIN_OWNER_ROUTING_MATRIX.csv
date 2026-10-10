@@ -1,0 +1,28 @@
+Intent / action,Execution owner,Data authority,Yance role
+send message,ChatterMate ChannelAdapter/message_delivery,ChatHistory + ChannelConversation,Yance selects intent/scope; native owner sends
+find contact,ChatterMate People/Customer,Customer,No second contact index
+merge identity,Customer merge + PersonIdentity thin extension,Customer,Thin identity adapter only
+search conversation/history,ChatterMate ChatHistory/repositories,ChatHistory,Canonical history query
+assign/handoff,SessionToAgent + human_routing,SessionToAgent,Native assignment/handoff
+search knowledge/FAQ,ChatterMate knowledge/FAQ tools,Knowledge/FAQ,Native retrieval
+run workflow or durable wait,ChatterMate workflow engine/WAIT node,Workflow/SessionToAgent,No Yance scheduler/workflow engine
+call MCP/tool/computer executor,ChatterMate MCP registry + external mature MCP tool,MCPTool + external tool,External tool owns action; Brain owns intent
+switch model/provider,ChatterMate AIConfig/model_catalog,AIConfig,No second model registry
+relationship/memory recall,Graphiti 0.30.2 + Neo4j Community 2026.09.0,Graphiti derived graph,Customer/ChatHistory remain source truth
+change persona,ChatterMate Agent.instructions + SQLAlchemy-Continuum history,Agent,Brain requests change; Agent stays current Persona owner
+translate,Argos Translate 1.11.0 + Lingua 2.2.0,ChatHistory original; translation is projection,Yance preview/integrity/fail-closed contract only
+voice input,whisper.cpp 1.9.4,FileAttachment/source audio,ASR only
+voice output/clone,CosyVoice3; Chatterbox fallback,Generated audio → FileAttachment,Windows qualification before wiring GREEN
+generate media,ComfyUI 0.38.0,Generated artifact → FileAttachment,Generative owner only
+deterministic image edit,ImageMagick 7.1.2-32,Artifact → FileAttachment,Narrow deterministic owner
+audio/video processing,FFmpeg 9.0.2,Artifact → FileAttachment,Codec/mux/trim owner
+search user media,digiKam 9.1.0 optional external index,digiKam user catalog,Read-only qualification; never second media store
+business WhatsApp/Telegram/Facebook Page,ChatterMate native channels,ChannelAccount/ChannelConversation,Official/business semantics native
+personal WhatsApp,Baileys 6.7.24 thin adapter,Baileys session + native route mapping,Qualification required
+personal Telegram,Telethon 1.45.0 thin adapter,Telethon session + native route mapping,Qualification required
+personal Instagram,instagrapi 3.0.20 conditional thin adapter,External session + native route mapping,Experimental/conditional only
+personal Messenger,NO OWNER SELECTED — WAIT,NONE,Do not implement custom protocol
+notifications,ChatterMate notifications/Firebase,UserNotificationSettings,Native
+ticket/investigation,ChatterMate ticket stack,Ticket/Investigation,Native action via Brain
+CRM sync,ChatterMate HubSpot/Pipedrive adapters,Customer remains canonical,Optional delegated sync
+backup/update/runtime action,Window 8 mature runtime owners,Window 8 authority,Brain may request; source window does not implement

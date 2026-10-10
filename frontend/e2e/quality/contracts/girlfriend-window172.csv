@@ -1,0 +1,24 @@
+Capability,Window172 source state,Runtime closure state,Execution/data owner,Evidence / exact boundary
+OFF default,CLOSED_SOURCE,CLOSED,Yance modal local open flag only,girlfriendBrainOpen=false; modal opens only from existing Conversation header
+Scope,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Existing owner selected by scope; no scope DB,turn/contact/language/relationship/global carried in intent/delegation requests
+Why,CLOSED_SOURCE,CLOSED_PROJECTION,Existing owner receipt projection,Why renders only from orchestration projection; no fabricated evidence
+Rule view,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Persona/Learning owner; Agent.instructions remains canonical,Rules are read-only projections supplied to modal; no local rule store
+Rule correction,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Window173 Persona/Learning seam planned,Emits typed correction request; current C3 route root has no production consumer
+Rule revert,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Window173 Persona history/rollback seam planned,Emits revert request; no local mutation
+Undo,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Delegated owner of last action,Emits undo request only when receipt exposes undoAvailable
+Turn-only,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Window173 current-turn semantics planned,Defaults ON and travels with typed intent; no persistent Window172 state
+Do-not-learn,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,ChatHistory/Rating/Persona learning lifecycle; Window173 active candidate,Defaults ON and travels with intent; Window172 does not create learning DB
+Sensitive confirmation,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Existing Permission/guardrail owner,Permission-required projection exposes cancel/allow-once and emits decision
+AI_AUTO natural-language config,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,SessionToAgent/Agent.ai_replies_enabled/message_delivery; Window173 active candidate,Stages scoped AI_AUTO request and explicitly says owner receipt pending; no auto-send
+Stale / recompute / abort,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Reply/current-context owner; Window173 active candidate,Stale UI fails closed and emits recompute/abort; runtime invalidation owner not duplicated
+Current goal,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Window173 current-turn goal seam planned,Current goal is request metadata only; no goal DB
+Long-term goal,CLOSED_SOURCE,NO_ADMITTED_DURABLE_OWNER_HOLD,NO_ADMITTED_DURABLE_GOAL_OWNER,Window174 and Window173 draft both state durable long-term goal owner unavailable
+Voice delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_HOLD,Existing Voice owner / Window171 Composer seam,Explicit runtime-pending projection; no provider invocation in Window172
+Photo delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_HOLD,Native FileAttachment / Window171 Composer seam,Explicit runtime-pending projection; no fake attachment
+Image delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_HOLD,Existing image owner / FileAttachment / Window171 seam,Explicit runtime-pending projection
+Video delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_HOLD,Existing video owner / FileAttachment / Window171 seam,Explicit runtime-pending projection
+File delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_HOLD,Native FileAttachment / Window171 Composer seam,Explicit runtime-pending projection
+Live delegation,CLOSED_SOURCE,CONTROLLED_INTEGRATION_AND_EXTERNAL_CREDENTIAL_HOLD,Window170 ElevenLabs + LiveAvatar source candidate,Window170 source commit exists but is not integrated into C3 and live UAT is HOLD_EXTERNAL_PROVIDER_CREDENTIAL
+Model delegation,CLOSED_SOURCE,OWNER_INTEGRATION_HOLD,Existing AIConfig/model owner,Explicit runtime-pending projection; Window172 creates no model registry
+Return to same Composer,CLOSED_SOURCE,PRODUCER_INTEGRATION_HOLD,Native Conversation/Composer/FileAttachment,Text/attachment/media result adoption uses existing conversation-extension adoptDraft/adoptAttachment/adoptMediaIntent only
+No duplicate authorities,CLOSED_SOURCE,CLOSED,Existing mature owners,No backend/schema/ConversationChat/provider/network/store/scheduler/runtime additions

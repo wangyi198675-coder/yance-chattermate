@@ -1,0 +1,21 @@
+Owner/component,License,Integration boundary,Redistribution / bundling obligations,Prohibited integration,Phase3 state
+ChatterMate core,Apache-2.0,native source owner,retain LICENSE/NOTICE/headers,N/A,IN CORE
+SQLAlchemy-Continuum 1.8.0,BSD-3-Clause,Python dependency/instrumentation over Agent history only,retain BSD notice,copying upstream implementation into Yance,ADMITTED DEPENDENCY
+Lingua 2.2.0,Apache-2.0,stateless detector dependency,Apache license/notice,vendoring without notice,ADMITTED DETECTOR ONLY
+Argos Translate 1.11.0,MIT/CC0; minisbd transitive AGPL-3.0,NONE while HOLD,full transitive review required,bundling/wiring before dependency-license and runtime-surface admission,NOT ADMITTED
+ImageMagick 7.1.2-32,ImageMagick License,independent portable executable / argv CLI,ship license/attribution,source/static fusion into Apache core,ADMITTED EXTERNAL EXECUTABLE
+FFmpeg n9.0.2-22 LGPL build,LGPL-3.0 binary build,independent executable / argv CLI,ship exact license/build metadata and LGPL compliance materials,ambiguous build or source/static fusion,ADMITTED EXTERNAL EXECUTABLE
+Neo4j Community 2026.09.0,GPLv3,future independent process/Bolt protocol,separate GPL distribution obligations,source/static fusion into Apache core,FUTURE / NOT ADMITTED
+ComfyUI 0.38.0,GPL-3.0,future independent process/API,separate GPL distribution obligations,source fusion into Apache core,FUTURE / NOT ADMITTED
+digiKam 9.1.0,GPL-2.0+,optional external read-only index if later qualified,separate GPL distribution obligations,copying source/catalog into Yance core,FUTURE OPTIONAL
+CTranslate2 4.8.2,MIT,external/private Python inference runtime only if future owner admitted,retain MIT notice,copying runtime implementation into Yance core,RUNTIME_QUALIFIED_TRANSLATION_OWNER_NOT_ADMITTED
+SentencePiece 0.2.2,Apache-2.0,mature tokenizer dependency owned by selected model/runtime,retain Apache-2.0 notice,custom tokenizer fork,QUALIFIED_DEPENDENCY
+Helsinki-NLP/opus-mt-de-ZH,Apache-2.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+Helsinki-NLP/opus-mt-zh-de,Apache-2.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+Helsinki-NLP/opus-mt-en-zh,Apache-2.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+Helsinki-NLP/opus-mt-zh-en,CC-BY-4.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+Helsinki-NLP/opus-mt-de-en,Apache-2.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+Helsinki-NLP/opus-mt-en-de,CC-BY-4.0,external model artifact only if selected,comply with exact model license; CC-BY models require attribution,embedding model/runtime source into Yance core,SHOOTOUT_NOT_ADMITTED
+facebook/m2m100_418M,MIT,external model only if selected,retain MIT notice,second provider framework/model registry,REJECTED_SHOOTOUT
+facebook/nllb-200-distilled-600M,CC-BY-NC-4.0,NONE for production owner in this rebuild line,non-commercial/attribution obligations,production integration outside accepted license boundary,REJECTED_SHOOTOUT
+google/madlad400-3b-mt,Apache-2.0,external model only if selected,retain Apache-2.0 notice,thick local model/runtime without admission,REJECTED_SHOOTOUT

@@ -1,0 +1,45 @@
+Capability ID,Additive capability,Absorption classification,Mature owner,Why retained,Runtime GREEN
+U01,Knowledge source ingestion,ACCESS_VIA_GIRLFRIEND_BRAIN,Knowledge models/services,Keep mature ingestion backend; expose by intent/context rather than enterprise dashboard.,NO — capability absorption mapping only
+U02,Knowledge semantic/vector retrieval,ACCESS_VIA_GIRLFRIEND_BRAIN,Knowledge search tool + vector links,Use for Brain/agent retrieval; no second search engine.,NO — capability absorption mapping only
+U03,FAQ authoring,ACCESS_VIA_CONTEXTUAL_ACTION,FAQ models/API,Contextual knowledge maintenance; support-dashboard chrome can stay hidden.,NO — capability absorption mapping only
+U04,AI FAQ generation,ACCESS_VIA_GIRLFRIEND_BRAIN,faq_generator + faq_generation services,Useful generative knowledge operation behind Brain.,NO — capability absorption mapping only
+U05,Public Help Center publishing,HIDE_PRESENTATION_ONLY,Help Center backend/templates,Backend may remain for optional publishing; enterprise support-center presentation is not primary Yance UI.,NO — capability absorption mapping only
+U06,Website/sitemap crawl ingestion,ACCESS_VIA_GIRLFRIEND_BRAIN,knowledge website/sitemap readers,Useful knowledge acquisition primitive.,NO — capability absorption mapping only
+U07,Knowledge ingest queue/progress tracking,KEEP_BACKEND_ONLY,knowledge_queue/progress,Operational mature primitive; project through diagnostics when relevant.,NO — capability absorption mapping only
+U08,MCP server registry,KEEP_AND_EXPOSE,MCPTool,Core extensibility primitive; expose in Frozen Settings/Brain routing.,NO — capability absorption mapping only
+U09,MCP multi-transport: STDIO/SSE/HTTP,KEEP_BACKEND_ONLY,MCPTool transports,Preserve mature transport abstraction.,NO — capability absorption mapping only
+U10,Visual workflow builder,FUTURE_UI_DESIGN_REQUIRED,WorkflowBuilder,Capability retained; Frozen UI currently has no approved first-level enterprise workflow canvas.,NO — capability absorption mapping only
+U11,Workflow Form node,ACCESS_VIA_GIRLFRIEND_BRAIN,Workflow FORM node,Delegated workflow primitive.,NO — capability absorption mapping only
+U12,Workflow Condition node,ACCESS_VIA_GIRLFRIEND_BRAIN,Workflow CONDITION node,Delegated workflow primitive.,NO — capability absorption mapping only
+U13,Workflow Wait node,ACCESS_VIA_GIRLFRIEND_BRAIN,Workflow WAIT node,Durable defer/wait owner; prevents custom scheduler.,NO — capability absorption mapping only
+U14,Workflow-scoped Human Transfer node,ACCESS_VIA_GIRLFRIEND_BRAIN,Workflow HUMAN_TRANSFER node,Delegated workflow handoff primitive.,NO — capability absorption mapping only
+U15,Workflow Guardrails node,ACCESS_VIA_GIRLFRIEND_BRAIN,Workflow GUARDRAILS node,Delegated safety/scope primitive.,NO — capability absorption mapping only
+U16,Workflow Action integrations,ACCESS_VIA_GIRLFRIEND_BRAIN,WEBHOOK/DATABASE/EMAIL/NOTIFICATION actions,Mature execution primitives behind owner routing.,NO — capability absorption mapping only
+U17,Lead capture configuration/forms,KEEP_BACKEND_ONLY,LeadCapture models/services,Useful contact acquisition primitive; enterprise lead-management chrome can stay hidden.,NO — capability absorption mapping only
+U18,Lead lifecycle Visitor→Lead→Customer,KEEP_BACKEND_ONLY,Customer LeadStage,Useful canonical lifecycle metadata without separate CRM.,NO — capability absorption mapping only
+U19,HubSpot CRM sync,ACCESS_VIA_GIRLFRIEND_BRAIN,native CRM HubSpot adapter,Optional delegated sync; never replaces Customer authority.,NO — capability absorption mapping only
+U20,Pipedrive CRM sync,ACCESS_VIA_GIRLFRIEND_BRAIN,native CRM Pipedrive adapter,Optional delegated sync; never replaces Customer authority.,NO — capability absorption mapping only
+U21,Native ticket lifecycle,KEEP_BACKEND_ONLY,Ticket models/services,Keep backend primitive; support-dashboard presentation hidden unless future design admits it.,NO — capability absorption mapping only
+U22,AI ticket investigation,ACCESS_VIA_GIRLFRIEND_BRAIN,ticket_investigator,Useful investigation action without new agent framework.,NO — capability absorption mapping only
+U23,Investigation hypotheses/evidence,ACCESS_VIA_GIRLFRIEND_BRAIN,Investigation models,Reusable structured investigation primitive.,NO — capability absorption mapping only
+U24,RCA/proposal documents,ACCESS_VIA_GIRLFRIEND_BRAIN,RCA/TicketProposal models,Useful structured output/action primitive.,NO — capability absorption mapping only
+U25,Ticket DB connectors,ACCESS_VIA_GIRLFRIEND_BRAIN,ticket_db_connector + db_connector_service,Optional delegated investigation data source.,NO — capability absorption mapping only
+U26,Jira integration,ACCESS_VIA_GIRLFRIEND_BRAIN,Jira toolkit/service,Optional external task/ticket action.,NO — capability absorption mapping only
+U27,CSAT/rating collection,ACCESS_VIA_CONTEXTUAL_ACTION,Rating + ticket_csat,Useful feedback signal and contextual action.,NO — capability absorption mapping only
+U28,Sentiment analysis,KEEP_BACKEND_ONLY,sentiment service/session fields,Derived signal for relationship/attention; not a separate truth owner.,NO — capability absorption mapping only
+U29,Analytics dashboard metrics,HIDE_PRESENTATION_ONLY,analytics API/views,Retain metrics backend; enterprise-style dashboard is not primary Yance surface.,NO — capability absorption mapping only
+U30,Agent performance analytics,KEEP_BACKEND_ONLY,analytics backend,Can feed diagnostics/evaluation without first-level presentation.,NO — capability absorption mapping only
+U31,Customer analytics,KEEP_BACKEND_ONLY,analytics backend,Can feed relationship/usage insights; Customer remains canonical.,NO — capability absorption mapping only
+U32,Sentiment analytics,KEEP_BACKEND_ONLY,analytics backend,Derived analysis retained backend-only.,NO — capability absorption mapping only
+U33,FCM push notifications,KEEP_AND_EXPOSE,firebase + notification settings,Useful personal notification capability; expose through Frozen Settings where applicable.,NO — capability absorption mapping only
+U34,Rate limiting and socket protections,KEEP_BACKEND_ONLY,agent limits + socket_rate_limit,Keep security/reliability primitive intact.,NO — capability absorption mapping only
+U35,Slack business channel,KEEP_BACKEND_ONLY,Slack channel/events,"Useful optional channel, not necessarily primary personal UI.",NO — capability absorption mapping only
+U36,Email channel,KEEP_AND_EXPOSE,Email ChannelAdapter,Useful direct communication transport.,NO — capability absorption mapping only
+U37,LINE channel,KEEP_AND_EXPOSE,LINE ChannelAdapter,Additional mature messaging channel.,NO — capability absorption mapping only
+U38,SMS provider abstraction,KEEP_AND_EXPOSE,Brevo/MessageBird/Plivo/SNS/Twilio/Vonage adapters,Broad mature SMS capability; preserve abstraction.,NO — capability absorption mapping only
+U39,WhatsApp template management,ACCESS_VIA_CONTEXTUAL_ACTION,WhatsApp template components/outbound service,Required when official window rules demand template send.,NO — capability absorption mapping only
+U40,Shopify product/order toolkit,HIDE_PRESENTATION_ONLY,Shopify toolkit/services,Backend toolkit is mature but ecommerce-specific presentation is irrelevant to primary private Yance.,NO — capability absorption mapping only
+U41,Widget app/plugin framework,KEEP_BACKEND_ONLY,WidgetApp models/components,Preserve extension primitive; do not expose enterprise administration by default.,NO — capability absorption mapping only
+U42,Embeddable web chat widget,KEEP_BACKEND_ONLY,webclient/widget,Useful optional companion surface; Frozen desktop UI remains authority.,NO — capability absorption mapping only
+U43,Guardrailed SQL/DB toolkit,ACCESS_VIA_GIRLFRIEND_BRAIN,guardrailed_db_toolkit + sql_guardrails,Powerful data action behind explicit owner/permission routing.,NO — capability absorption mapping only
+U44,RBAC roles/groups/inbox scoping,KEEP_BACKEND_ONLY,Permission/Role/UserGroup/chat_scope_roles,Keep mature access primitives even if private deployment hides team-admin chrome.,NO — capability absorption mapping only

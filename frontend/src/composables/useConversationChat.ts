@@ -1,0 +1,475 @@
+/*
+Copyright 2024-2026 ChatterMate
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import type { ChatDetail, Message } from '@/types/chat'
+import { formatDistanceToNow } from 'date-fns'
+import { chatService, mergeCanonicalMessages } from '@/services/chat'
+import { userService } from '@/services/user'
+import { socketService } from '@/services/socket'
+import { toast } from 'vue-sonner'
+import { canRequestRating, endChatMessage as endChatMessageFor } from '@/utils/endChat'
+import { canTakeOverChat, chatHandler } from '@/utils/chatState'
+import { routeChatToHuman } from '@/utils/chatActions'
+import { permissionChecks } from '@/utils/permissions'
+
+// Define valid chat statuses
+type ChatStatus = 'open' | 'closed' | 'transferred'
+
+/** Emitted by the backend when a reply was saved but never reached the customer. */
+interface DeliveryErrorEvent {
+  error?: string
+  type?: string
+  session_id?: string
+  client_send_intent_id?: string
+  message_id?: number
+  can_template?: boolean
+}
+
+export function useConversationChat(
+  initialChat: ChatDetail,
+  emit: {
+    (event: 'refresh'): void
+    (event: 'chatUpdated', data: ChatDetail): void
+    (event: 'clearUnread', sessionId: string): void
+  }
+) {
+  const chat = ref<ChatDetail>(initialChat)
+  const newMessage = ref('')
+  const messagesContainer = ref<HTMLElement | null>(null)
+  const isLoading = ref(false)
+  const isLoadingOlder = ref(false)
+  let historyPageGeneration = 0
+  const currentUserId = userService.getUserId()
+  // Set once a send is refused because the messaging window closed and a
+  // template would reopen it. The frontend can't tell the window has expired on
+  // its own — it never sees the customer's last inbound time — so this is only
+  // known after the backend refuses a send.
+  const templateCanReopen = ref(false)
+
+  // Claimable and allowed to claim. Shared with ChatInfoPanel via
+  // canTakeOverChat so the chat screen and the info panel can't disagree —
+  // this pane used to require status 'transferred', which left an AI-handled
+  // chat claimable only from the info panel.
+  const showTakeoverButton = computed(
+    () => canTakeOverChat(chat.value) && permissionChecks.canTakeOverChats()
+  )
+
+  // Who is answering the customer. Derived once, shared with the inbox list and
+  // the info panel through chatHandler, so the three surfaces cannot disagree.
+  const handler = computed(() => chatHandler(chat.value, currentUserId))
+
+  const handledByAI = computed(() => handler.value.kind === 'ai')
+
+  // Nobody is answering yet: the AI queued it, or this agent never uses AI.
+  const isWaitingForHuman = computed(() => handler.value.kind === 'waiting')
+
+  const isChatClosed = computed(() => handler.value.kind === 'closed')
+
+  // A colleague holds it: we can watch, but not reply.
+  const showTakenOverStatus = computed(
+    () => handler.value.kind === 'human' && chat.value.user_id !== currentUserId
+  )
+
+  /** One sentence explaining why the composer is unavailable, per handler. */
+  const handlerCaption = computed(() => {
+    switch (handler.value.kind) {
+      case 'ai':
+        return 'This chat is being handled by AI'
+      case 'waiting':
+        // Deliberately not "the AI handed this over": with AI switched off on
+        // the agent there was never an AI in the conversation to hand it on.
+        return 'This chat is waiting for someone to pick it up'
+      case 'closed':
+        return 'This chat has been closed'
+      default:
+        return `This chat is being handled by ${handler.value.label}`
+    }
+  })
+
+  const canSendMessage = computed(() => {
+    // Cannot send if chat is closed
+    if (isChatClosed.value) return false
+    
+    // Cannot send if needs takeover or taken by another user
+    return !showTakeoverButton.value && !showTakenOverStatus.value
+  })
+
+  // Message growth must not yank a user who is reading older history.
+  // TanStack Virtual owns append-following; this watcher only preserves the
+  // messaging-window semantic.
+  watch(
+    () => chat.value.messages[chat.value.messages.length - 1]?.message_type,
+    (messageType) => {
+      if (messageType === 'user') {
+        templateCanReopen.value = false
+      }
+    },
+  )
+
+  // The same composable instance serves whichever chat is selected, so a
+  // closed window learned about in one conversation must not follow us to the
+  // next. Sending a template reopens the window, which also clears it.
+  watch(() => chat.value.session_id, () => {
+    templateCanReopen.value = false
+    historyPageGeneration++
+    isLoadingOlder.value = false
+  })
+
+  const clearTemplateSuggestion = () => {
+    templateCanReopen.value = false
+  }
+
+  const loadOlderMessages = async () => {
+    const cursor = chat.value.older_cursor
+    if (!chat.value.has_older || !cursor || isLoadingOlder.value) return
+
+    const sessionId = chat.value.session_id
+    const requestGeneration = ++historyPageGeneration
+    isLoadingOlder.value = true
+    try {
+      const page = await chatService.getMessagePage(sessionId, 'older', cursor)
+      if (
+        requestGeneration !== historyPageGeneration ||
+        chat.value.session_id !== sessionId
+      ) {
+        return
+      }
+
+      chat.value = {
+        ...chat.value,
+        messages: mergeCanonicalMessages(chat.value.messages || [], page.messages),
+        has_older: page.has_more,
+        older_cursor: page.next_cursor,
+      }
+      emit('chatUpdated', chat.value)
+    } catch (error) {
+      if (
+        requestGeneration === historyPageGeneration &&
+        chat.value.session_id === sessionId
+      ) {
+        console.error('Failed to load older messages:', error)
+      }
+    } finally {
+      if (
+        requestGeneration === historyPageGeneration &&
+        chat.value.session_id === sessionId
+      ) {
+        isLoadingOlder.value = false
+      }
+    }
+  }
+
+  const updateChat = (newChat: ChatDetail) => {
+    chat.value = { ...newChat }
+    // Emit event to clear unreads
+    emit('clearUnread', newChat.session_id)
+    // Emit chatUpdated event to ensure the parent component updates
+    emit('chatUpdated', chat.value)
+  }
+
+  // Replace chat state from parent props without emitting events
+  const replaceChatFromProps = (newChat: ChatDetail) => {
+    chat.value = { ...newChat }
+  }
+
+  const sendMessage = async () => {
+    if (!newMessage.value.trim() || !canSendMessage.value) return
+
+    const clientSendIntentId = crypto.randomUUID()
+    const sessionId = chat.value.session_id
+    const messageText = newMessage.value
+    const timestamp = new Date().toISOString()
+    const localMessage: Message = {
+      client_send_intent_id: clientSendIntentId,
+      message: messageText,
+      message_type: 'agent',
+      created_at: timestamp,
+      session_id: sessionId
+    }
+
+    newMessage.value = ''
+    chat.value.messages.push(localMessage)
+    chat.value.updated_at = timestamp
+
+    try {
+      const ack = await socketService.emitWithPersistenceAck<{
+        status?: string
+        client_send_intent_id?: string
+        message_id?: number
+        reason?: string
+      }>('agent_message', {
+        client_send_intent_id: clientSendIntentId,
+        message: messageText,
+        session_id: sessionId,
+        message_type: 'agent',
+        created_at: timestamp
+      })
+
+      if (!ack || ack.client_send_intent_id !== clientSendIntentId) {
+        throw new Error('Mismatched client send acknowledgement')
+      }
+      if (ack.status !== 'accepted' || ack.message_id == null) {
+        localMessage.attributes = {
+          ...(localMessage.attributes || {}),
+          delivery_status: 'failed',
+          client_send_error: ack.reason || 'send_rejected',
+        }
+        throw new Error(ack.reason || 'Send rejected')
+      }
+      localMessage.id = ack.message_id
+    } catch (err) {
+      console.error('Failed to send message:', err)
+      toast.error('Failed to send message', {
+        description: 'Please try again',
+        duration: 4000,
+        closeButton: true
+      })
+    }
+  }
+
+  const handleTakeover = async () => {
+    try {
+      isLoading.value = true
+      await chatService.takeoverChat(chat.value.session_id)
+      
+      // Show success toast
+      toast.success('Chat taken over successfully', {
+        description: 'You can now send messages in this chat',
+        duration: 4000,
+        closeButton: true
+      })
+      const userName = userService.getUserName()
+      const userId = userService.getUserId()
+
+      // Update local chat state
+      chat.value = {
+        ...chat.value,
+        status: 'open',
+        user_id: userId,
+        user_name: userName
+      }
+
+      socketService.emit('taken_over', { session_id: chat.value.session_id, user_name: userName, profile_picture: userService.getCurrentUser()?.profile_pic ? userService.getCurrentUser()?.profile_pic : '' })
+      
+      // Emit refresh event to update chat status
+      emit('refresh')
+      // Also emit chatUpdated event to ensure the parent component updates
+      emit('chatUpdated', chat.value)
+    } catch (err: any) {
+      console.error('Failed to takeover chat:', err)
+      
+      // Show error toast with specific message if available
+      toast.error('Failed to take over chat', {
+        description: err.response?.data?.detail || 'Please try again',
+        duration: 4000,
+        closeButton: true
+      })
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  const handleRouteToHuman = async () => {
+    try {
+      isLoading.value = true
+      const updated = await routeChatToHuman(chat.value.session_id)
+      if (!updated) return
+
+      // The endpoint returns the whole thread back, so take its state rather
+      // than guessing at a local patch.
+      chat.value = updated
+      emit('refresh')
+      emit('chatUpdated', chat.value)
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  // Add endChat function
+  const endChat = async (requestRating = true) => {
+    const previousStatus = chat.value.status
+    let endChatMessage: Message | null = null
+    try {
+      isLoading.value = true
+
+      // Only the web widget can render a rating; on external channels the ask
+      // is dropped and the closing message says nothing about rating.
+      const askRating = requestRating && canRequestRating(chat.value.channel)
+      const clientSendIntentId = crypto.randomUUID()
+      const sessionId = chat.value.session_id
+      const timestamp = new Date().toISOString()
+
+      endChatMessage = {
+        client_send_intent_id: clientSendIntentId,
+        message: endChatMessageFor(chat.value.channel),
+        message_type: 'system',
+        created_at: timestamp,
+        session_id: sessionId,
+        end_chat: true,
+        end_chat_reason: 'AGENT_REQUEST',
+        end_chat_description: 'Agent manually ended the chat'
+      }
+
+      chat.value.messages.push(endChatMessage)
+      chat.value.status = 'closed'
+      chat.value.updated_at = timestamp
+
+      const ack = await socketService.emitWithPersistenceAck<{
+        status?: string
+        client_send_intent_id?: string
+        message_id?: number
+        reason?: string
+      }>('agent_message', {
+        client_send_intent_id: clientSendIntentId,
+        message: endChatMessage.message,
+        session_id: sessionId,
+        message_type: endChatMessage.message_type,
+        created_at: timestamp,
+        end_chat: true,
+        request_rating: askRating,
+        end_chat_reason: 'AGENT_REQUEST',
+        end_chat_description: 'Agent manually ended the chat'
+      })
+
+      if (!ack || ack.client_send_intent_id !== clientSendIntentId) {
+        throw new Error('Mismatched end-chat acknowledgement')
+      }
+      if (ack.status !== 'accepted' || ack.message_id == null) {
+        throw new Error(ack.reason || 'End chat rejected')
+      }
+      endChatMessage.id = ack.message_id
+
+      toast.success('Chat ended successfully', {
+        description: askRating ? 'Customer will be asked for feedback' : 'Chat has been closed',
+        duration: 4000,
+        closeButton: true
+      })
+
+      emit('refresh')
+      emit('chatUpdated', chat.value)
+    } catch (err) {
+      chat.value.status = previousStatus
+      if (endChatMessage) {
+        endChatMessage.attributes = {
+          ...(endChatMessage.attributes || {}),
+          delivery_status: 'failed',
+        }
+      }
+      console.error('Failed to end chat:', err)
+      toast.error('Failed to end chat', {
+        description: 'Please try again',
+        duration: 4000,
+        closeButton: true
+      })
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  // Delivery failures reconcile to the exact optimistic/canonical message.
+  // Position/content/timestamp guessing is deliberately forbidden.
+  const markAgentMessageUndelivered = (data: DeliveryErrorEvent) => {
+    const message = chat.value.messages.find((candidate) => {
+      if (
+        data.client_send_intent_id &&
+        candidate.client_send_intent_id === data.client_send_intent_id
+      ) {
+        return true
+      }
+      return data.message_id != null && candidate.id === data.message_id
+    })
+    if (!message) return
+    message.attributes = { ...message.attributes, delivery_status: 'failed' }
+  }
+
+  // On external channels a send can fail after the message is already stored
+  // (typically once WhatsApp's 24h window closes). Without this the agent sees
+  // their message sitting in the thread and assumes it arrived.
+  const handleDeliveryError = (data: DeliveryErrorEvent) => {
+    if (data?.type !== 'delivery_error' || data.session_id !== chat.value.session_id) return
+    markAgentMessageUndelivered(data)
+    if (data.can_template) templateCanReopen.value = true
+    toast.error('Message not delivered', {
+      description: data.error,
+      duration: 6000,
+      closeButton: true
+    })
+  }
+
+  const setupSocketListeners = () => {
+    socketService.on('error', handleDeliveryError)
+  }
+
+  const cleanupSocketListeners = () => {
+    socketService.off('error', handleDeliveryError)
+  }
+
+  const handleSocketReconnect = () => {
+    cleanupSocketListeners()
+    setupSocketListeners()
+  }
+
+  onMounted(() => {
+    setupSocketListeners()
+    socketService.onReconnect(handleSocketReconnect)
+  })
+
+  onBeforeUnmount(() => {
+    cleanupSocketListeners()
+    socketService.offReconnect(handleSocketReconnect)
+  })
+
+  const formattedMessages = computed(() => {
+    const formatted = chat.value.messages.map(msg => ({
+      ...msg,
+      timeAgo: formatDistanceToNow(new Date(msg.created_at), { addSuffix: true })
+    }))
+    
+    // Debug: Log messages with attachments
+    formatted.forEach((msg, idx) => {
+      if (msg.attachments && msg.attachments.length > 0) {
+        console.log(`[Message ${idx}] Has ${msg.attachments.length} attachments:`, msg.attachments)
+      }
+    })
+    
+    return formatted
+  })
+
+  return {
+    newMessage,
+    messagesContainer,
+    formattedMessages,
+    isLoading,
+    isLoadingOlder,
+    loadOlderMessages,
+    showTakeoverButton,
+    showTakenOverStatus,
+    isChatClosed,
+    canSendMessage,
+    sendMessage,
+    handleTakeover,
+    handleRouteToHuman,
+    isWaitingForHuman,
+    handlerCaption,
+    updateChat,
+    replaceChatFromProps,
+    handledByAI,
+    endChat,
+    templateCanReopen,
+    clearTemplateSuggestion
+  }
+} 

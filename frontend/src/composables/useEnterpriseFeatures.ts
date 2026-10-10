@@ -1,0 +1,230 @@
+/*
+Copyright 2024-2026 ChatterMate
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import { ref, readonly, defineComponent, defineAsyncComponent, h, computed } from 'vue'
+import type { Component } from 'vue'
+
+// Create a proper Vue component for the fallback
+const NotAvailableComponent = defineComponent({
+  name: 'NotAvailable',
+  setup() {
+    return () => h('div', 'Feature not available in open source version')
+  },
+})
+
+// Check for enterprise module
+const enterpriseModules = import.meta.glob([
+  '/src/modules/enterprise/views/SignupView.vue',
+  '/src/modules/enterprise/composables/useSubscriptionStore.ts',
+  '/src/modules/enterprise/router/guards/subscription.ts',
+])
+const hasEnterpriseModule = Object.keys(enterpriseModules).length > 0
+
+interface Plan {
+  type: string
+  name: string
+  [key: string]: any
+}
+
+interface SubscriptionPlan {
+  plan: Plan
+  message_count?: number
+  message_limit?: number
+  [key: string]: any
+}
+
+interface SubscriptionStore {
+  currentPlan: SubscriptionPlan | null
+  isLoadingPlan: boolean
+  isInTrial: boolean
+  trialDaysLeft: number
+  fetchCurrentPlan: () => Promise<void>
+}
+
+interface MessageLimitStatus {
+  type: 'warning' | 'error'
+  message: string
+  percentage: number
+}
+
+interface SubscriptionGuard {
+  subscriptionGuard: (to: any, from: any, next: any) => void
+}
+
+type EnterpriseModule = {
+  default?: Component
+  subscriptionStore?: SubscriptionStore
+  subscriptionGuard?: (to: any, from: any, next: any) => void
+  initShopifyApp?: () => any
+  getSessionToken?: (app: any) => Promise<string>
+  useShopifyIntegration?: (agentId: string) => any
+}
+
+// Create a mapping of module paths to their direct imports
+// These should be used with dynamic import() directly, not with glob
+const moduleImports = {
+  signupView: '/src/modules/enterprise/views/SignupView.vue',
+  subscriptionView: '/src/modules/enterprise/views/SubscriptionView.vue',
+  billingSetupView: '/src/modules/enterprise/views/BillingSetupView.vue',
+  subscriptionStore: '/src/modules/enterprise/composables/useSubscriptionStore.ts',
+  subscriptionGuard: '/src/modules/enterprise/router/guards/subscription.ts',
+  exploreView: '/src/modules/enterprise/views/ExploreView.vue',
+  shopifySessionTokenBounce: '/src/modules/enterprise/views/ShopifySessionTokenBouncePage.vue',
+  shopifyConnect: '/src/modules/enterprise/views/ShopifyConnectAccountView.vue',
+  shopifyAuthComplete: '/src/modules/enterprise/views/ShopifyAuthCompleteView.vue',
+  shopifyAgentSelection: '/src/modules/enterprise/views/ShopifyAgentSelectionView.vue',
+  shopifyAgentManagement: '/src/modules/enterprise/views/ShopifyAgentManagementView.vue',
+  shopifyInbox: '/src/modules/enterprise/views/ShopifyInboxView.vue',
+  shopifyPricing: '/src/modules/enterprise/views/ShopifyPricingView.vue',
+  shopifyAppBridge: '/src/modules/enterprise/plugins/shopifyAppBridge.ts',
+  shopifyAppBridgeUtilities: '/src/modules/enterprise/plugins/shopifyAppBridgeUtilities.ts',
+  shopifyIntegration: '/src/modules/enterprise/composables/useShopifyIntegration.ts',
+  // Promo offer surfaces (render nothing in the open-source build)
+  promoSurfaces: '/src/modules/enterprise/components/promo/PromoSurfaces.vue',
+  promoHeaderPill: '/src/modules/enterprise/components/promo/PromoHeaderPill.vue',
+  promoUsageCard: '/src/modules/enterprise/components/promo/PromoUsageCard.vue',
+  promoGateNotice: '/src/modules/enterprise/components/promo/PromoGateNotice.vue',
+  promoLimitToast: '/src/modules/enterprise/components/promo/PromoLimitToast.vue',
+}
+
+/** Renders nothing: the open-source stand-in for an enterprise-only surface. */
+const EmptyComponent = defineComponent({ name: 'EnterpriseEmpty', setup: () => () => null })
+
+// One glob for the whole module (a literal object per evaluation otherwise),
+// and one async-component definition per path for the life of the app.
+const allEnterpriseModules = import.meta.glob<EnterpriseModule>([
+  '/src/modules/enterprise/**/*.vue',
+  '/src/modules/enterprise/**/*.ts',
+])
+const asyncComponents = new Map<string, Component>()
+
+// Default subscription state
+const defaultSubscriptionState: SubscriptionStore = {
+  currentPlan: null,
+  isLoadingPlan: false,
+  isInTrial: false,
+  trialDaysLeft: 0,
+  fetchCurrentPlan: () => Promise.resolve(),
+}
+
+export const useEnterpriseFeatures = () => {
+  const subscriptionStore = ref<SubscriptionStore>(defaultSubscriptionState)
+
+  const showMessageLimitWarning = computed(() => {
+    const plan = subscriptionStore.value.currentPlan
+    if (!plan?.plan) return false
+
+    const messageCount = plan.message_count || 0
+    const messageLimit = plan.message_limit
+
+    if (!messageLimit) return false
+
+    return messageCount >= messageLimit * 0.9
+  })
+
+  const messageLimitStatus = computed<MessageLimitStatus | null>(() => {
+    const plan = subscriptionStore.value.currentPlan
+    if (!plan?.plan) return null
+
+    const messageCount = plan.message_count || 0
+    const messageLimit = plan.message_limit
+
+    if (!messageLimit) return null
+
+    const usagePercentage = (messageCount / messageLimit) * 100
+
+    if (messageCount >= messageLimit) {
+      return {
+        type: 'error',
+        message: 'Message limit exceeded! Switch to your own model or upgrade plan.',
+        percentage: 100,
+      }
+    } else if (usagePercentage >= 90) {
+      return {
+        type: 'warning',
+        message: `Approaching message limit (${Math.round(usagePercentage)}%). Consider upgrading your plan.`,
+        percentage: usagePercentage,
+      }
+    }
+
+    return null
+  })
+
+  const modules = allEnterpriseModules
+
+  // Check if any enterprise modules exist
+  const hasEnterpriseModule = Object.keys(modules).length > 0
+
+  const loadModule = async (modulePath: string): Promise<EnterpriseModule | null> => {
+    if (!hasEnterpriseModule) {
+      return null
+    }
+
+    try {
+      if (modules[modulePath]) {
+        const module = await modules[modulePath]()
+        return module
+      }
+      return null
+    } catch (error) {
+      console.warn(`Failed to load enterprise module: ${modulePath}`, error)
+      return null
+    }
+  }
+
+  /**
+   * An enterprise component as an async component, or an empty one when the
+   * module is absent - so open-source templates can mount promo surfaces
+   * unconditionally without importing enterprise code.
+   */
+  const enterpriseComponent = (modulePath: string): Component => {
+    if (!hasEnterpriseModule || !modules[modulePath]) return EmptyComponent
+    let component = asyncComponents.get(modulePath)
+    if (!component) {
+      component = defineAsyncComponent(async () => {
+        const module = await loadModule(modulePath)
+        return module?.default ?? EmptyComponent
+      })
+      asyncComponents.set(modulePath, component)
+    }
+    return component
+  }
+
+  const initializeSubscriptionStore = async () => {
+    if (hasEnterpriseModule) {
+      try {
+        const module = await loadModule(moduleImports.subscriptionStore)
+        if (module?.subscriptionStore) {
+          subscriptionStore.value = module.subscriptionStore
+        }
+      } catch (error) {
+        console.warn('Enterprise subscription store not available:', error)
+      }
+    }
+  }
+
+  return {
+    hasEnterpriseModule,
+    subscriptionStore: readonly(subscriptionStore),
+    initializeSubscriptionStore,
+    loadModule,
+    moduleImports,
+    enterpriseComponent,
+    NotAvailableComponent,
+    showMessageLimitWarning,
+    messageLimitStatus,
+  }
+}

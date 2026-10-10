@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Yance Browser-Assisted Profile Enrichment",
+  "version": "0.1.0",
+  "description": "User-invoked, current-tab-only Messenger profile enrichment for Yance.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmQweD+B7GReL2dilWEThzfSwfo9Dbs3KQqZ93uR4yGzZPuoziKIRv758niQwLfneZnS2Ql7/KlXkkRQXB2JAkiyzZRYvtJy+gnnuSmnd/hFk+bVW/q6AGWFHLQN/HsqVsMqCs9k7DpyxD4wfOJqKJ7Jg3yhIwbplXyyVszrhDKifEp0IUP5/VkIqo8sO5Ww1TrHx2DOpKn5Fn4gO43g+pIKnd6C0R6HEtEGHF7P/vDziHrZdYHCCcbAXQ0Qyj/9UIAgilLnhF6kutq6YgeQ0jSnXpti4LSaWNJCxb/IxvhqTZDcTyHVTvs6PrSiW/s/DMDchlC8IJ7hGY20SZVKVmQIDAQAB",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "action": {
+    "default_title": "Read visible Messenger profile for Yance"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

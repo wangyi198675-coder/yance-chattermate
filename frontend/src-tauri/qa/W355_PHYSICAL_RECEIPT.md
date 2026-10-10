@@ -1,0 +1,15 @@
+# W355 Windows isolated physical QA — 2026-10-09
+
+**Git authority:** independent branch fix/window355-0e3b-native-tauri-runtime-bridge, original C3 parent 0e3b27ca6013a94ad1fbcf9a5ae75b0392260783; source scope frontend/src-tauri only. Separately advanced canonical C3 078f053a05db2b658a758ea930400c98477a5405 includes W353; W355 must not rebase/merge source. Controller alone cherry-picks this disjoint candidate.
+
+**Build:** Windows Cargo --offline --locked unit tests 4/4 PASS; cargo build --offline produced an actual Yance.exe Windows app, using official Tauri 2.12.0, Velopack 1.2.161. No global private-runtime software installation.
+
+**Actual new cold boot:** isolated binary directory C:\Users\1\YanceScratch\W355_NATIVE_TAURI_ISOLATED, fresh nonproduction data root C:\Users\1\YanceScratch\W355_NATIVE_TAURI_DPAPI_COLD4. Process Compose native processes launched private PostgreSQL 16, Garnet, Python ChatterMate app.main and knowledge worker. Upstream initdb accepts memory-only Windows named pipe --pwfile (separate first-instance probe: client connected true, initdb exit 0, PG_VERSION true). Backend reached READY; GET /health 200 and /api/v1/organizations/setup-status 200. No plaintext key file or temporary pwfile.
+
+**Security:** CurrentUser DPAPI encrypted root credential filename runtime-secrets.dpapi; its SHA256 is 2A2AEC44E9B37880649E7C6BB2FC8431753EAF7A5610D955127AEAD2000580ED (hash only). Data-root and credential ACL inspection showed only DESKTOP-029FH47\1 and NT AUTHORITY\SYSTEM full access. Process Compose YAML scan for DB/JWT/CONVERSATION/ENCRYPTION key variables and password file flags returned zero matches. Rust DPAPI roundtrip, tampering rejection, and durable reopening without regeneration tested (4 Rust tests total).
+
+**Restart:** normal Windows CloseMainWindow returned true, Yance process exited, four dedicated port listeners reduced to zero. PG_VERSION=16 data persisted. Using exact same cold4 directory on relaunch resulted READY and both backend 200 responses. DPAPI ciphertext SHA256 remained 2A2AEC44E9B37880649E7C6BB2FC8431753EAF7A5610D955127AEAD2000580ED. Earlier interrupted PG init case with cluster initialized but yance DB absent was recovered using native DB probe/create and canonical Alembic.
+
+**Native window:** GUI process responsive; a QA native window measured 936x629 outer coordinates, with Tauri configuration inner 920x620. Earlier DPAPI-stage read-only WebView2 listing showed http://tauri.localhost/yance after READY. An actual installed-package unique Composer interaction was not independently executed here.
+
+**HOLD:** official Process Compose Windows graceful signals remain unqualified, W350 private binary forbidden. No signed install/release claim. W351 exact-C3 repackage and W356 authorized installed-user UAT (unique Composer, private bootstrap UI, quit/restart and uninstall) must follow sole Active Controller cherry-pick. Existing legacy C:\YanceController\current-user-data requires separate authorized import, never automatic overwrite. No production C3, frozen W351 package or production data touched.

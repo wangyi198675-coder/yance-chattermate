@@ -1,0 +1,153 @@
+name: Yance QA contracts and native E2E
+
+on:
+  push:
+    branches: [main, integrate/post-c2-controlled-source-20261007, 'work/window373-*']
+  pull_request:
+    branches: [main, integrate/post-c2-controlled-source-20261007]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-preflight:
+    name: Requirement catalog and Playwright discovery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Contract integrity (not full product PASS)
+        working-directory: frontend
+        run: node e2e/quality/verify-coverage.mjs --mode=preflight
+      - name: Assert fault injection really blocks invalid coverage and stale SHA
+        working-directory: frontend
+        run: node e2e/quality/gate-selftest.mjs
+      - name: Adversarial actual trace ZIP byte and status verification
+        working-directory: frontend
+        run: node e2e/quality/playwright-artifact-selftest.mjs
+      - name: Guard P1 native test-source assertions against regressions (not E2E)
+        working-directory: frontend
+        run: node e2e/quality/native-provenance-selftest.mjs
+      - name: Verify current-branch native runner/workflow source contract (not activation)
+        working-directory: frontend
+        run: node e2e/quality/ci-workflow-contract.mjs
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Playwright test discovery
+        working-directory: frontend
+        run: npx playwright test --project=chromium-native --list
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: contract-${{ github.sha }}
+          path: frontend/test-results/yance-quality/
+          if-no-files-found: warn
+
+  backend-test:
+    name: Backend pytest (not provider acceptance)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio httpx pytest-cov
+      - name: Run pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
+        run: python -m pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=65
+
+  frontend-test:
+    name: Vitest typecheck build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit -- --run
+      - run: npm run type-check
+      - run: npm run build-only
+
+  native-chromium:
+    name: REQUIRED real isolated PG Chromium 920x620 (no mock PASS)
+    # W327 must provision the private Windows native-QA runner and PostgreSQL.
+    # An unprovisioned runner leaves this gate queued/NOT_RUN, never green.
+    runs-on: [self-hosted, windows, yance-native-qa]
+    needs: [contract-preflight]
+    timeout-minutes: 45
+    env:
+      YANCE_QA_NATIVE_URL: ${{ vars.YANCE_QA_NATIVE_URL }}
+      YANCE_QA_NATIVE_API_URL: ${{ vars.YANCE_QA_NATIVE_API_URL }}
+      YANCE_QA_ISOLATED: ${{ vars.YANCE_QA_ISOLATED }}
+      YANCE_QA_FIXTURE: ${{ vars.YANCE_QA_FIXTURE }}
+      YANCE_QA_ORG_ID: ${{ vars.YANCE_QA_ORG_ID }}
+      YANCE_QA_USER_ID: ${{ vars.YANCE_QA_USER_ID }}
+      YANCE_QA_CUSTOMER_ID: ${{ vars.YANCE_QA_CUSTOMER_ID }}
+      YANCE_QA_SESSION_ID: ${{ vars.YANCE_QA_SESSION_ID }}
+      YANCE_QA_MESSAGE_ID: ${{ vars.YANCE_QA_MESSAGE_ID }}
+      YANCE_QA_PSQL_EXE: ${{ vars.YANCE_QA_PSQL_EXE }}
+      YANCE_QA_PGSERVICEFILE: ${{ vars.YANCE_QA_PGSERVICEFILE }}
+      YANCE_QA_PGSERVICE: ${{ vars.YANCE_QA_PGSERVICE }}
+      W327_APPROVED_QA_REPOSITORY_ID: ${{ vars.W327_APPROVED_QA_REPOSITORY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install chromium
+      - name: True native E2E; lack of PG/identity is failure
+        working-directory: frontend
+        run: npx playwright test --project=chromium-native
+      - name: Capture CI self-observation (never official W327 approval)
+        if: always()
+        working-directory: frontend
+        run: node e2e/quality/capture-ci-provenance.mjs
+      - name: Uncovered requirement ledger (separate from native execution)
+        if: always()
+        working-directory: frontend
+        run: node e2e/quality/verify-coverage.mjs --mode=preflight
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ github.sha }}
+          path: |
+            frontend/test-results/playwright-artifacts/
+            frontend/test-results/playwright-results.json
+            frontend/test-results/playwright-html/
+            frontend/test-results/yance-quality/
+          if-no-files-found: warn

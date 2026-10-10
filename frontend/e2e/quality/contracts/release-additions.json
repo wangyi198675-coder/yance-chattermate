@@ -1,0 +1,307 @@
+[
+  {
+    "id": "RUX-01",
+    "family": "RUX",
+    "title": "No owner-facing plans, upsell, permission paywall",
+    "owner": "native UI RBAC/security"
+  },
+  {
+    "id": "RUX-02",
+    "family": "RUX",
+    "title": "Start at /yance without product login/registration/invitation",
+    "owner": "desktop preauthorized native session"
+  },
+  {
+    "id": "RUX-03",
+    "family": "RUX",
+    "title": "Berlin current-time greeting, DST and truthful weather",
+    "owner": "Europe/Berlin & qualified weather owner"
+  },
+  {
+    "id": "RUX-04",
+    "family": "RUX",
+    "title": "ALL UNREAD FOLLOW FAVORITE ARCHIVED native filters",
+    "owner": "SessionToAgent.is_archived and native inbox states"
+  },
+  {
+    "id": "RUX-05",
+    "family": "RUX",
+    "title": "Contact right-click native operations and qualified durable pin",
+    "owner": "ConversationsList and native durable pin owner HOLD"
+  },
+  {
+    "id": "RUX-06",
+    "family": "RUX",
+    "title": "Message context menu original copy, translated copy separately, conditional media and permissions",
+    "owner": "ChatHistory + per-channel capability"
+  },
+  {
+    "id": "RUX-07",
+    "family": "RUX",
+    "title": "Original primary and Chinese secondary, message sides, fail closed",
+    "owner": "ChatHistory original + canonical translation projection"
+  },
+  {
+    "id": "RUX-08",
+    "family": "RUX",
+    "title": "Header confirmed nationality, city, age, occupation without invented facts",
+    "owner": "People native customer meta_data"
+  },
+  {
+    "id": "RUX-09",
+    "family": "RUX",
+    "title": "Collapsible contact rail preserves one composer at 920x620",
+    "owner": "ConversationsList + ConversationChat"
+  },
+  {
+    "id": "RUX-10",
+    "family": "RUX",
+    "title": "Native pin/archive context states, clipping, keyboard and restart",
+    "owner": "SessionToAgent persisted states, pin HOLD"
+  },
+  {
+    "id": "RUX-11",
+    "family": "RUX",
+    "title": "Switching contact preserves provenance and real existing user data",
+    "owner": "Customer/ChannelConversation"
+  },
+  {
+    "id": "GF-INTENT-01",
+    "family": "GF_INTENT",
+    "title": "Natural-language instruction primary entry",
+    "owner": "YanceGirlfriendBrainNativeComposition → Agno"
+  },
+  {
+    "id": "GF-INTENT-02",
+    "family": "GF_INTENT",
+    "title": "Iterative clarification before action",
+    "owner": "native agent/tool permission orchestration"
+  },
+  {
+    "id": "GF-INTENT-03",
+    "family": "GF_INTENT",
+    "title": "Scope current turn/contact/language/relationship/global",
+    "owner": "native scoped conversation/identity"
+  },
+  {
+    "id": "GF-INTENT-04",
+    "family": "GF_INTENT",
+    "title": "Separate current and durable long term goals",
+    "owner": "qualified native goal owner HOLD"
+  },
+  {
+    "id": "GF-INTENT-05",
+    "family": "GF_INTENT",
+    "title": "Persona view, rationale, correction, undo, history",
+    "owner": "native persona and approval path"
+  },
+  {
+    "id": "GF-INTENT-06",
+    "family": "GF_INTENT",
+    "title": "Do not learn and one-turn override",
+    "owner": "native learning policy"
+  },
+  {
+    "id": "GF-INTENT-07",
+    "family": "GF_INTENT",
+    "title": "Why with evidence and source",
+    "owner": "native agent/reply receipts"
+  },
+  {
+    "id": "GF-INTENT-08",
+    "family": "GF_INTENT",
+    "title": "Intent proposal permission confirmation cancel",
+    "owner": "native action authorization"
+  },
+  {
+    "id": "GF-INTENT-09",
+    "family": "GF_INTENT",
+    "title": "AI_AUTO scope with native agent",
+    "owner": "ChatAgent/AIConfig"
+  },
+  {
+    "id": "GF-INTENT-10",
+    "family": "GF_INTENT",
+    "title": "Native model and reasoning selection",
+    "owner": "AIConfig + Agno"
+  },
+  {
+    "id": "GF-INTENT-11",
+    "family": "GF_INTENT",
+    "title": "Reply candidates 0–3 max5 stale recompute no reply",
+    "owner": "ReplyBrain + ChatHistory"
+  },
+  {
+    "id": "GF-INTENT-12",
+    "family": "GF_INTENT",
+    "title": "Voice image video photo file live delegated truthfully",
+    "owner": "FileAttachment and admitted native owners"
+  },
+  {
+    "id": "GF-INTENT-13",
+    "family": "GF_INTENT",
+    "title": "Tenant/customer/session isolation",
+    "owner": "native channel customer scope"
+  },
+  {
+    "id": "GF-INTENT-14",
+    "family": "GF_INTENT",
+    "title": "Action receipts undo rollback and durable restart",
+    "owner": "native message_delivery + goal receipts"
+  },
+  {
+    "id": "GF-INTENT-15",
+    "family": "GF_INTENT",
+    "title": "Adopt output into exactly one Composer; send permission only",
+    "owner": "ConversationChat native composer"
+  },
+  {
+    "id": "CHANNEL-01",
+    "family": "PROVIDER",
+    "title": "Facebook Page Messenger official OAuth",
+    "owner": "native ChannelAccount/Meta Page",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-02",
+    "family": "PROVIDER",
+    "title": "WhatsApp Business Cloud official",
+    "owner": "native ChannelAccount/Cloud API",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-03",
+    "family": "PROVIDER",
+    "title": "WhatsApp personal QR qualification",
+    "owner": "separate qualified secure adapter HOLD",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-04",
+    "family": "PROVIDER",
+    "title": "Telegram Bot token",
+    "owner": "native ChannelAccount Telegram Bot",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-05",
+    "family": "PROVIDER",
+    "title": "Telegram personal login qualification",
+    "owner": "TDLib security owner HOLD",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-06",
+    "family": "PROVIDER",
+    "title": "Facebook personal Messenger benchmark qualification",
+    "owner": "permitted transport owner HOLD",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-07",
+    "family": "PROVIDER",
+    "title": "Instagram Business official OAuth",
+    "owner": "native ChannelAccount Instagram",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-08",
+    "family": "PROVIDER",
+    "title": "LINE official login",
+    "owner": "native ChannelAccount LINE",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-09",
+    "family": "PROVIDER",
+    "title": "Email native account",
+    "owner": "native ChannelAccount email",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-10",
+    "family": "PROVIDER",
+    "title": "SMS native account",
+    "owner": "native ChannelAccount SMS",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "CHANNEL-11",
+    "family": "PROVIDER",
+    "title": "Slack native OAuth",
+    "owner": "native ChannelAccount Slack",
+    "provider": "REAL_PROVIDER_GATE"
+  },
+  {
+    "id": "NATIVE-01",
+    "family": "NATIVE_PARITY",
+    "title": "Native AI Agents / Agno",
+    "owner": "ChatAgent + Agno"
+  },
+  {
+    "id": "NATIVE-02",
+    "family": "NATIVE_PARITY",
+    "title": "Knowledge lifecycle",
+    "owner": "native Knowledge, worker"
+  },
+  {
+    "id": "NATIVE-03",
+    "family": "NATIVE_PARITY",
+    "title": "Inbox/Tickets persistence",
+    "owner": "native Ticket/ChatHistory"
+  },
+  {
+    "id": "NATIVE-04",
+    "family": "NATIVE_PARITY",
+    "title": "People/Customer identity",
+    "owner": "native Customer"
+  },
+  {
+    "id": "NATIVE-05",
+    "family": "NATIVE_PARITY",
+    "title": "ChatHistory and ChannelConversation",
+    "owner": "native ChatHistory"
+  },
+  {
+    "id": "NATIVE-06",
+    "family": "NATIVE_PARITY",
+    "title": "Message delivery retry/ACK/idempotence",
+    "owner": "native message_delivery"
+  },
+  {
+    "id": "NATIVE-07",
+    "family": "NATIVE_PARITY",
+    "title": "Files/media/voice and attachment delivery",
+    "owner": "native FileAttachment"
+  },
+  {
+    "id": "NATIVE-08",
+    "family": "NATIVE_PARITY",
+    "title": "Workflow / automation without second scheduler",
+    "owner": "native workflow"
+  },
+  {
+    "id": "NATIVE-09",
+    "family": "NATIVE_PARITY",
+    "title": "AIConfig real provider readiness",
+    "owner": "native AIConfig"
+  },
+  {
+    "id": "NATIVE-10",
+    "family": "NATIVE_PARITY",
+    "title": "Native RBAC internal only",
+    "owner": "native organization security"
+  },
+  {
+    "id": "NATIVE-11",
+    "family": "NATIVE_PARITY",
+    "title": "Windows zero-container start/stop/restart/upgrade",
+    "owner": "private runtime + Velopack"
+  },
+  {
+    "id": "NATIVE-12",
+    "family": "NATIVE_PARITY",
+    "title": "Actual current-branch screenshot vs approved RC3",
+    "owner": "Playwright pixels and W372 approved baseline HOLD"
+  }
+]
