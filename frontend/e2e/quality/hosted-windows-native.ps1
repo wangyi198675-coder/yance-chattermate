@@ -14,6 +14,12 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $py = (Get-Command python -ErrorAction Stop).Source
 function PutEnv([string]$key,[string]$value) {
  if (-not $env:GITHUB_ENV) { throw 'GITHUB_ENV_REQUIRED' }
+ # Mask disposable QA values BEFORE persisting GITHUB_ENV. These were visible
+ # in GitHub's untrusted logs on the first real native job.
+ if($key -in @('DATABASE_URL','JWT_SECRET_KEY','CONVERSATION_SECRET_KEY',
+              'ENCRYPTION_KEY','YANCE_QA_SYNTHETIC_PASSWORD')){
+  Write-Output ('::add-mask::'+$value)
+ }
  Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value ($key+'='+$value)
  [Environment]::SetEnvironmentVariable($key,$value,'Process')
 }
@@ -61,6 +67,7 @@ if ($Phase -eq 'prepare') {
  RequireExit 'REAL_POSTGRES_READY'
  $env:PGPASSWORD='root'
  $password=([guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N'))
+ Write-Output ('::add-mask::'+$password)
  ("CREATE ROLE yance_ci_runner LOGIN PASSWORD '"+$password+"' NOSUPERUSER NOCREATEDB NOCREATEROLE;") |
    & $psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1
  RequireExit 'CREATE_QA_ROLE'
@@ -119,12 +126,27 @@ if ($Phase -eq 'prepare') {
  } finally { Pop-Location }
  Write-Output 'REAL_POSTGRES_MIGRATION_SEED_DONE_NOT_BROWSER_PASS'
 }
+function GetBoundNativeBackendPid {
+ $listeners=@(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction Stop |
+    Where-Object { $_.LocalAddress -in @('127.0.0.1','::1') })
+ $owners=@($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+ if($owners.Count -ne 1){throw 'NATIVE_BACKEND_EXPECTED_ONE_LOOPBACK_LISTENER'}
+ $ownerPid=[int]$owners[0]
+ $pinfo=Get-CimInstance Win32_Process -Filter ('ProcessId = '+$ownerPid)
+ if($null -eq $pinfo -or $pinfo.Name -notmatch '^python(?:\.exe)?$' -or
+    $pinfo.CommandLine -notmatch 'uvicorn|multiprocessing'){
+   throw 'NATIVE_BACKEND_PORT_NOT_OWNED_BY_REAL_PYTHON'
+ }
+ return $ownerPid
+}
 function BeginBackend {
  $args=@('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000')
  $p=Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory $backend -PassThru -RedirectStandardOutput (Join-Path $logDir 'backend-stdout.log') -RedirectStandardError (Join-Path $logDir 'backend-stderr.log')
- Set-Content (Join-Path $env:RUNNER_TEMP 'qa-backend.pid') $p.Id
  Health
- return $p.Id
+ $boundPid=GetBoundNativeBackendPid
+ Set-Content (Join-Path $env:RUNNER_TEMP 'qa-backend.pid') $boundPid
+ Write-Output ('REAL_BACKEND_BOUND_LOOPBACK_PID='+$boundPid)
+ return $boundPid
 }
 if ($Phase -eq 'start') {
  $backendPid=BeginBackend
@@ -154,6 +176,7 @@ if ($Phase -eq 'start') {
 }
 if ($Phase -eq 'restart') {
  $before=[int](Get-Content (Join-Path $env:RUNNER_TEMP 'qa-backend.pid') -Raw)
+ if($before -ne (GetBoundNativeBackendPid)){throw 'NATIVE_RESTART_PID_DIFFERENT_FROM_BOUND_LISTENER'}
  Get-Process -Id $before -ErrorAction Stop | Stop-Process -Force
  Start-Sleep -Seconds 2
  if(Get-Process -Id $before -ErrorAction SilentlyContinue){throw 'BACKEND_OLD_PID_STILL_RUNNING'}

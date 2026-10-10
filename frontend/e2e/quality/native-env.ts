@@ -34,10 +34,20 @@ export function nativePgSnapshot(){
  if(!Object.values(fixture).every(Boolean)||![fixture.org,fixture.user,fixture.customer,fixture.session].every(isUuid)
    ||!/^\d{1,12}$/.test(fixture.message))
   throw Error('NATIVE_QA_CANONICAL_ORG_USER_CUSTOMER_SESSION_CHAT_IDS_REQUIRED')
- const info=postgres("SELECT current_database() || '|' || COALESCE(inet_server_addr()::text,'local') || '|' || extract(epoch from pg_postmaster_start_time())::bigint")
- const [db,server,epoch]=info.split('|')
- if(!/^(yance|chattermate)[a-z0-9_]*(_qa|_test)$/i.test(db||'') || !['local','127.0.0.1','::1'].includes(server||'')
-  ||!/^\d+$/.test(epoch||''))throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED')
+ // Read exact PostgreSQL server identity as structured SQL (not pipe-split
+ // strings). A real GH Windows run exposed an ambiguous provenance projection.
+ const raw=postgres("SELECT json_build_object('database',current_database(),'server',COALESCE(inet_server_addr()::text,'local'),'epoch',extract(epoch from pg_postmaster_start_time())::bigint)::text")
+ let identity:{database?:unknown,server?:unknown,epoch?:unknown}
+ try{identity=JSON.parse(raw) as typeof identity}catch{throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:INVALID_POSTGRES_JSON')}
+ const db=identity.database
+ const server=identity.server
+ const epoch=identity.epoch
+ const dbQualified=typeof db==='string'&&/^(yance|chattermate)[a-z0-9_]*(_qa|_test)$/i.test(db)
+ const serverQualified=typeof server==='string'&&['local','127.0.0.1','::1'].includes(server)
+ const epochQualified=(typeof epoch==='number'&&Number.isSafeInteger(epoch)&&epoch>1000000000)
+ if(!dbQualified||!serverQualified||!epochQualified)
+  throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:'+JSON.stringify({
+   dbQualified,serverQualified,epochQualified,fieldTypes:[typeof db,typeof server,typeof epoch]}))
  const sql=`SELECT count(*) FROM customers c
  JOIN session_to_agents s ON s.customer_id=c.id AND s.organization_id=c.organization_id
  JOIN chat_history h ON h.session_id=s.session_id AND h.customer_id=c.id AND h.organization_id=c.organization_id
