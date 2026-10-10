@@ -42,7 +42,11 @@ if ($Phase -eq 'prepare') {
  [IO.File]::WriteAllText($conf,[regex]::Replace($raw,$pattern,"listen_addresses = 'localhost'"))
  # Actual native migration add_ticketing_core_001 requires pgvector; compile the
  # pinned mature upstream extension against this VM's real PostgreSQL 17.
- $vcvars='C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
+ $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+ if (-not (Test-Path $vswhere)) { throw 'OFFICIAL_GH_RUNNER_VSWHERE_MISSING' }
+ $vsRoot=(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+ if (-not $vsRoot) { throw 'OFFICIAL_GH_RUNNER_MSVC_COMPONENT_MISSING' }
+ $vcvars=Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
  if (-not (Test-Path $vcvars)) { throw 'OFFICIAL_MSVC_CXX_COMPILER_MISSING_FOR_REAL_PGVECTOR' }
  $extSrc=Join-Path $env:RUNNER_TEMP 'yance-native-pgvector-src'
  & git clone --quiet --depth 1 --branch v0.8.1 https://github.com/pgvector/pgvector.git $extSrc
