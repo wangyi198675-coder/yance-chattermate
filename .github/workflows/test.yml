@@ -56,7 +56,31 @@ jobs:
 
   backend-test:
     name: Backend pytest (not provider acceptance)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Real PostgreSQL 16 + pgvector, isolated for this GitHub-hosted job only.
+    # W381 clones one migrated w381_test_* database per integration test.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ephemeral_ci_only_not_production
+          POSTGRES_DB: w381_test_template
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d w381_test_template"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:ephemeral_ci_only_not_production@127.0.0.1:5432/w381_test_template
+      W381_TEST_POSTGRES_URL: postgresql+psycopg://postgres:ephemeral_ci_only_not_production@127.0.0.1:5432/w381_test_template
+      PGPASSWORD: ephemeral_ci_only_not_production
+      ENVIRONMENT: development
+      REDIS_ENABLED: 'false'
+      S3_FILE_STORAGE: 'false'
+      PYTHONPATH: ${{ github.workspace }}/backend
     defaults:
       run:
         working-directory: backend
@@ -65,13 +89,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify real PostgreSQL 16 and pgvector server, not SQLite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          psql -h 127.0.0.1 -U postgres -d w381_test_template -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+          psql -h 127.0.0.1 -U postgres -d w381_test_template -v ON_ERROR_STOP=1 -Atc "SELECT current_setting('server_version_num'), extversion FROM pg_extension WHERE extname='vector';"
+          test "$(psql -h 127.0.0.1 -U postgres -d w381_test_template -Atc "SELECT current_setting('server_version_num')::int >= 160000 AND current_setting('server_version_num')::int < 170000 AND EXISTS (SELECT 1 FROM pg_extension WHERE extname='vector')")" = t
       - name: Install existing dependencies
         run: |
           python -m pip install -r requirements.txt
           python -m pip install pytest pytest-asyncio httpx pytest-cov
-      - name: Run pytest
-        env:
-          PYTHONPATH: ${{ github.workspace }}/backend
+      - name: Migrate real private PostgreSQL test template with Alembic
+        run: |
+          python -m alembic upgrade head
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.engine import make_url
+          url = make_url(os.environ['W381_TEST_POSTGRES_URL'])
+          assert url.drivername.startswith('postgresql')
+          assert url.host == '127.0.0.1'
+          assert url.database == 'w381_test_template'
+          with create_engine(url).connect() as conn:
+              assert conn.execute(text("SELECT to_regclass('public.session_to_agents')")).scalar_one()
+              assert conn.execute(text("SELECT to_regclass('public.user_notification_settings')")).scalar_one()
+              assert conn.execute(text("SELECT count(*) FROM alembic_version")).scalar_one() == 1
+              assert conn.execute(text("SELECT extversion FROM pg_extension WHERE extname='vector'")).scalar_one()
+          print('REAL_PG16_PGVECTOR_ALEMBIC_TEMPLATE_VERIFIED')
+          PY
+      - name: Run pytest (preserve all real failures, including W387 Agent schema)
         run: python -m pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=65
 
   frontend-test:
@@ -94,25 +141,16 @@ jobs:
 
   native-chromium:
     name: REQUIRED real isolated PG Chromium 920x620 (no mock PASS)
-    # W327 must provision the private Windows native-QA runner and PostgreSQL.
-    # An unprovisioned runner leaves this gate queued/NOT_RUN, never green.
-    runs-on: [self-hosted, windows, yance-native-qa]
+    # Ephemeral official hosted VM. No daily-desktop/self-hosted runner registration.
+    # Pull requests get only repository read scope, with no provider or production secrets.
+    runs-on: windows-2025
     needs: [contract-preflight]
-    timeout-minutes: 45
+    timeout-minutes: 90
+    permissions:
+      contents: read
     env:
-      YANCE_QA_NATIVE_URL: ${{ vars.YANCE_QA_NATIVE_URL }}
-      YANCE_QA_NATIVE_API_URL: ${{ vars.YANCE_QA_NATIVE_API_URL }}
-      YANCE_QA_ISOLATED: ${{ vars.YANCE_QA_ISOLATED }}
-      YANCE_QA_FIXTURE: ${{ vars.YANCE_QA_FIXTURE }}
-      YANCE_QA_ORG_ID: ${{ vars.YANCE_QA_ORG_ID }}
-      YANCE_QA_USER_ID: ${{ vars.YANCE_QA_USER_ID }}
-      YANCE_QA_CUSTOMER_ID: ${{ vars.YANCE_QA_CUSTOMER_ID }}
-      YANCE_QA_SESSION_ID: ${{ vars.YANCE_QA_SESSION_ID }}
-      YANCE_QA_MESSAGE_ID: ${{ vars.YANCE_QA_MESSAGE_ID }}
-      YANCE_QA_PSQL_EXE: ${{ vars.YANCE_QA_PSQL_EXE }}
-      YANCE_QA_PGSERVICEFILE: ${{ vars.YANCE_QA_PGSERVICEFILE }}
-      YANCE_QA_PGSERVICE: ${{ vars.YANCE_QA_PGSERVICE }}
-      W327_APPROVED_QA_REPOSITORY_ID: ${{ vars.W327_APPROVED_QA_REPOSITORY_ID }}
+      YANCE_QA_NATIVE_URL: http://127.0.0.1:5173
+      YANCE_QA_NATIVE_API_URL: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,15 +163,43 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Playwright
+      - name: Verify this is a short-lived GitHub-hosted PR-safe Windows VM
+        shell: pwsh
+        run: |
+          if ("${{ runner.environment }}" -ne "github-hosted") { throw "GITHUB_HOSTED_ONLY" }
+          if ("${{ github.event_name }}" -eq "pull_request_target") { throw "PR_TARGET_FORBIDDEN" }
+          if ("${{ github.event_name }}" -eq "pull_request" -and "${{ github.event.pull_request.head.repo.fork }}" -eq "true") {
+            Write-Output "FORK_PR_WITH_READ_ONLY_TOKEN_NO_PRODUCTION_SECRETS"
+          }
+          Write-Output ("RUNNER_IMAGE="+$env:ImageOS+";SHA="+$env:GITHUB_SHA)
+      - name: Install real private PostgreSQL, Alembic schema and native ORM fixture
+        id: native_setup
+        shell: pwsh
+        run: ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase prepare
+      - name: Install real frontend and Chromium
         working-directory: frontend
+        shell: pwsh
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { throw "NPM_CI_FAILED" }
           npx playwright install chromium
-      - name: True native E2E; lack of PG/identity is failure
+          if ($LASTEXITCODE -ne 0) { throw "PLAYWRIGHT_CHROMIUM_INSTALL_FAILED" }
+      - name: Start real ChatterMate app.main and Vue local-only
+        id: native_start
+        shell: pwsh
+        run: ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase start
+      - name: True PostgreSQL authenticated native Chromium 920x620 (RED remains RED)
+        id: native_real
         working-directory: frontend
-        run: npx playwright test --project=chromium-native
-      - name: Capture CI self-observation (never official W327 approval)
+        shell: pwsh
+        run: |
+          npx playwright test --project=chromium-native
+          if ($LASTEXITCODE -ne 0) { throw "REAL_NATIVE_CHROMIUM_FAILED" }
+      - name: Real native backend process restart and PostgreSQL readback
+        if: ${{ always() && steps.native_start.outcome == 'success' }}
+        shell: pwsh
+        run: ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase restart
+      - name: Capture CI self-observation (never official W362 approval)
         if: always()
         working-directory: frontend
         run: node e2e/quality/capture-ci-provenance.mjs

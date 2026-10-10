@@ -2,7 +2,7 @@
 import { expect, type Page, type TestInfo } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { resolve, isAbsolute } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 export const nativeUrl=process.env.YANCE_QA_NATIVE_URL||''
 export const nativeApi=process.env.YANCE_QA_NATIVE_API_URL||''
 export const fixture={
@@ -100,6 +100,25 @@ export async function requireNative(page:Page, info:TestInfo){
  info.annotations.push({type:'pg-server-epoch',description:String(db.dbPostmasterEpoch)})
  const health=await page.request.get(new URL('/health',nativeApi).toString(),{timeout:7000})
  expect(health.ok(),'Actual native app.main health required but is NOT proof of PG').toBeTruthy()
+ // GH-hosted isolated QA creates a *real* disposable User and logs in via the
+ // actual native /users/login endpoint. No pre-fabricated mock JWT or HTTP route.
+ if(process.env.GITHUB_ACTIONS==='true'){
+  const user=process.env.YANCE_QA_AUTH_USER||''
+  const secretFile=process.env.YANCE_QA_AUTH_PASSWORD_FILE||''
+  if(!user||!isAbsolute(secretFile)||!existsSync(secretFile))throw Error('HOSTED_NATIVE_REAL_LOGIN_CREDENTIAL_FILE_REQUIRED')
+  const login=await page.request.post(new URL('/api/v1/users/login',nativeApi).toString(),{
+   form:{username:user,password:readFileSync(secretFile,'utf8').trim()},timeout:10000})
+  expect(login.ok(),'Native login returned real auth failure').toBeTruthy()
+  const auth=await login.json() as {access_token?:string,user?:Record<string,unknown>}
+  expect(typeof auth.access_token).toBe('string')
+  expect(String(auth.user?.id)).toBe(fixture.user)
+  // Preserve the real endpoint's HttpOnly Secure cookie flags. Never forge a
+  // less-strict browser cookie to fabricate an authenticated native session.
+  const actualCookies=await page.context().cookies(nativeApi)
+  expect(actualCookies.some(c=>c.name==='access_token'&&c.httpOnly&&c.secure),
+   'Actual login must set its real Secure HttpOnly cookie').toBeTruthy()
+  await page.addInitScript((actualUser)=>localStorage.setItem('user_info',JSON.stringify(actualUser)),auth.user)
+ }
  // A backend authenticated ChatHistory GET is required; anonymous 200 does not qualify.
  const response=await page.request.get(new URL('/api/v1/chats/'+fixture.session,nativeApi).toString(),{timeout:7000})
  expect(response.ok(),'Native auth scope must read persisted ChatHistory').toBeTruthy()
