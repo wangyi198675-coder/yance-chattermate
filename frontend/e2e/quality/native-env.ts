@@ -2,7 +2,7 @@
 import { expect, type Page, type TestInfo } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { resolve, isAbsolute } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 export const nativeUrl=process.env.YANCE_QA_NATIVE_URL||''
 export const nativeApi=process.env.YANCE_QA_NATIVE_API_URL||''
 export const fixture={
@@ -34,10 +34,22 @@ export function nativePgSnapshot(){
  if(!Object.values(fixture).every(Boolean)||![fixture.org,fixture.user,fixture.customer,fixture.session].every(isUuid)
    ||!/^\d{1,12}$/.test(fixture.message))
   throw Error('NATIVE_QA_CANONICAL_ORG_USER_CUSTOMER_SESSION_CHAT_IDS_REQUIRED')
- const info=postgres("SELECT current_database() || '|' || COALESCE(inet_server_addr()::text,'local') || '|' || extract(epoch from pg_postmaster_start_time())::bigint")
- const [db,server,epoch]=info.split('|')
- if(!/^(yance|chattermate)[a-z0-9_]*(_qa|_test)$/i.test(db||'') || !['local','127.0.0.1','::1'].includes(server||'')
-  ||!/^\d+$/.test(epoch||''))throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED')
+ // Read exact PostgreSQL server identity as structured SQL (not pipe-split
+ // strings). A real GH Windows run exposed an ambiguous provenance projection.
+ // Compare INET values inside PostgreSQL, not its OS-dependent printable IPv6
+ // representation. Only exact IPv4/IPv6 loopback socket addresses qualify.
+ const raw=postgres("SELECT json_build_object('database',current_database(),'server',COALESCE(inet_server_addr()::text,'local'),'serverLoopback',COALESCE(inet_server_addr()=inet '127.0.0.1' OR inet_server_addr()=inet '::1' OR inet_server_addr()=inet '::ffff:127.0.0.1',false),'epoch',extract(epoch from pg_postmaster_start_time())::bigint)::text")
+ let identity:{database?:unknown,server?:unknown,serverLoopback?:unknown,epoch?:unknown}
+ try{identity=JSON.parse(raw) as typeof identity}catch{throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:INVALID_POSTGRES_JSON')}
+ const db=identity.database
+ const server=identity.server
+ const epoch=identity.epoch
+ const dbQualified=typeof db==='string'&&/^(yance|chattermate)[a-z0-9_]*(_qa|_test)$/i.test(db)
+ const serverQualified=typeof server==='string'&&identity.serverLoopback===true
+ const epochQualified=(typeof epoch==='number'&&Number.isSafeInteger(epoch)&&epoch>1000000000)
+ if(!dbQualified||!serverQualified||!epochQualified)
+  throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:'+JSON.stringify({
+   dbQualified,serverQualified,epochQualified,fieldTypes:[typeof db,typeof server,typeof epoch]}))
  const sql=`SELECT count(*) FROM customers c
  JOIN session_to_agents s ON s.customer_id=c.id AND s.organization_id=c.organization_id
  JOIN chat_history h ON h.session_id=s.session_id AND h.customer_id=c.id AND h.organization_id=c.organization_id
@@ -100,6 +112,25 @@ export async function requireNative(page:Page, info:TestInfo){
  info.annotations.push({type:'pg-server-epoch',description:String(db.dbPostmasterEpoch)})
  const health=await page.request.get(new URL('/health',nativeApi).toString(),{timeout:7000})
  expect(health.ok(),'Actual native app.main health required but is NOT proof of PG').toBeTruthy()
+ // GH-hosted isolated QA creates a *real* disposable User and logs in via the
+ // actual native /users/login endpoint. No pre-fabricated mock JWT or HTTP route.
+ if(process.env.GITHUB_ACTIONS==='true'){
+  const user=process.env.YANCE_QA_AUTH_USER||''
+  const secretFile=process.env.YANCE_QA_AUTH_PASSWORD_FILE||''
+  if(!user||!isAbsolute(secretFile)||!existsSync(secretFile))throw Error('HOSTED_NATIVE_REAL_LOGIN_CREDENTIAL_FILE_REQUIRED')
+  const login=await page.request.post(new URL('/api/v1/users/login',nativeApi).toString(),{
+   form:{username:user,password:readFileSync(secretFile,'utf8').trim()},timeout:10000})
+  expect(login.ok(),'Native login returned real auth failure').toBeTruthy()
+  const auth=await login.json() as {access_token?:string,user?:Record<string,unknown>}
+  expect(typeof auth.access_token).toBe('string')
+  expect(String(auth.user?.id)).toBe(fixture.user)
+  // Preserve the real endpoint's HttpOnly Secure cookie flags. Never forge a
+  // less-strict browser cookie to fabricate an authenticated native session.
+  const actualCookies=await page.context().cookies(nativeApi)
+  expect(actualCookies.some(c=>c.name==='access_token'&&c.httpOnly&&c.secure),
+   'Actual login must set its real Secure HttpOnly cookie').toBeTruthy()
+  await page.addInitScript((actualUser)=>localStorage.setItem('user_info',JSON.stringify(actualUser)),auth.user)
+ }
  // A backend authenticated ChatHistory GET is required; anonymous 200 does not qualify.
  const response=await page.request.get(new URL('/api/v1/chats/'+fixture.session,nativeApi).toString(),{timeout:7000})
  expect(response.ok(),'Native auth scope must read persisted ChatHistory').toBeTruthy()

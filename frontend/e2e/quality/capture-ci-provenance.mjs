@@ -1,4 +1,4 @@
-// Untrusted CI self-observation, not W327 approval. Copy actual trace ZIP bytes
+// Untrusted CI self-observation, not W362 independent GitHub API approval. Copy actual trace ZIP bytes
 // into downloadable artifact; independent reviewer must re-download and rehash.
 import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, lstatSync, realpathSync } from 'node:fs'
 import { resolve, join, relative, sep } from 'node:path'
@@ -12,9 +12,9 @@ if(env.GITHUB_ACTIONS!=='true'||env.RUNNER_OS!=='Windows'||env.GITHUB_SHA!==sour
  ||env.GITHUB_JOB!=='native-chromium'||!/^\d+$/.test(env.GITHUB_RUN_ID||'')
  ||!/^\d+$/.test(env.GITHUB_REPOSITORY_ID||'')||!/^\d+$/.test(env.GITHUB_RUN_ATTEMPT||''))
  fail('NOT_A_CURRENT_SHA_PROTECTED_GITHUB_WINDOWS_JOB')
-if(env.W327_APPROVED_QA_REPOSITORY_ID!==env.GITHUB_REPOSITORY_ID)
- fail('NOT_W327_APPROVED_REPOSITORY_ID')
-// Runner cannot self-certify a GitHub API job ID. W327 fetches and signs job metadata separately.
+if(env.RUNNER_ENVIRONMENT!=='github-hosted'||env.GITHUB_REPOSITORY!=='wangyi198675-coder/yance-chattermate')
+ fail('NOT_OFFICIAL_EPHEMERAL_WINDOWS_OR_WRONG_REPO')
+// Runner cannot self-certify GitHub job ID. W362 independently queries GH API before any admission.
 const run={runId:env.GITHUB_RUN_ID,jobName:env.GITHUB_JOB,jobId:'W327_GITHUB_API_LOOKUP_REQUIRED',
  repositoryId:env.GITHUB_REPOSITORY_ID,runAttempt:env.GITHUB_RUN_ATTEMPT}
 const raw=join(cwd,'test-results/playwright-results.json')
@@ -62,4 +62,4 @@ writeFileSync(join(out,'ci-run-context-UNVERIFIED.json'),JSON.stringify({
  traceManifestSha256:digest(readFileSync(join(out,'trace-manifest.json')))},
  verifiedTraceZipsCopied:tests.length
 },null,2)+'\n')
-console.log('CI_ZIP_BYTES_CAPTURED_UNVERIFIED_PENDING_W327_RETRIEVAL_AND_SIGNATURE count='+tests.length)
+console.log('CI_ZIP_BYTES_CAPTURED_UNVERIFIED_PENDING_W362_EXTERNAL_GH_API_RETRIEVAL count='+tests.length)

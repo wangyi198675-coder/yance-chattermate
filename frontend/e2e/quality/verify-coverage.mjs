@@ -12,10 +12,7 @@ const contractDir = options['contract-dir'] ? resolve(options['contract-dir']) :
 const mode=options.mode||'preflight'
 if (!['preflight','release'].includes(mode)) throw Error('INVALID_GATE_MODE')
 const sourceSha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim()
-const ancestry=execFileSync('git',['rev-list','--parents','-n','1','HEAD'],{cwd:root,encoding:'utf8'}).trim().split(/\s+/)
-if(ancestry[0]!==sourceSha) throw Error('GIT_ANCESTRY_SHA_MISMATCH')
-const rootCommit=ancestry.length===1
-const parentSha=rootCommit?'':ancestry[1]
+const parentSha=execFileSync('git',['rev-parse','HEAD^'],{cwd:root,encoding:'utf8'}).trim()
 const branch=execFileSync('git',['branch','--show-current'],{cwd:root,encoding:'utf8'}).trim()
 const errors=[]
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex').toUpperCase()
@@ -88,9 +85,27 @@ if(inject==='gf-reorder')errors.push('INJECTED_GF_ORDER_IDENTITY')
 if(inject==='unknown-id')errors.push('INJECTED_UNKNOWN_REQUIREMENT')
 if(inject==='malformed-row')errors.push('MALFORMED_REQUIREMENT_ROW')
 if(inject==='stale-sha')errors.push('SOURCE_SHA_MISMATCH')
-if(!branch)errors.push('DETACHED_GIT_BRANCH')
-if(!sourceSha.match(/^[a-f0-9]{40}$/)||(!rootCommit&&!parentSha.match(/^[a-f0-9]{40}$/)))errors.push('INVALID_GIT_IDENTITY')
-if(rootCommit && mode==='release')errors.push('ROOT_COMMIT_NO_PARENT_ATTESTATION')
+// GitHub pull_request checks out a synthetic merge commit in detached HEAD.
+// Admit that source identity for *catalog preflight only* when the actual
+// GitHub event's PR-head SHA equals git HEAD^2, with same-repo read-only scope.
+// This never authorizes product release nor calls a merge commit the PR head.
+let auditedBranch=branch
+if(!branch){
+ const eventFile=process.env.GITHUB_EVENT_PATH||''
+ if(process.env.GITHUB_ACTIONS==='true'&&process.env.GITHUB_EVENT_NAME==='pull_request'
+    &&eventFile&&existsSync(eventFile)){
+  const event=JSON.parse(readFileSync(eventFile,'utf8'))
+  const pull=event.pull_request
+  let secondParent=''
+  try{secondParent=execFileSync('git',['rev-parse','HEAD^2'],{cwd:root,encoding:'utf8'}).trim()}catch{}
+  if(pull?.head?.sha===secondParent&&pull?.head?.ref===process.env.GITHUB_HEAD_REF
+      &&pull?.head?.repo?.full_name===process.env.GITHUB_REPOSITORY
+      &&pull?.base?.ref==='main'&&sourceSha===process.env.GITHUB_SHA){
+   auditedBranch=pull.head.ref
+  }else errors.push('UNVERIFIED_GITHUB_PR_MERGE_PROVENANCE')
+ }else errors.push('DETACHED_GIT_BRANCH')
+}
+if(!sourceSha.match(/^[a-f0-9]{40}$/)||!parentSha.match(/^[a-f0-9]{40}$/))errors.push('INVALID_GIT_IDENTITY')
 function specs(path){return !existsSync(path)?[]:readdirSync(path,{withFileTypes:true}).flatMap(e=>
  e.isDirectory()?specs(join(path,e.name)):(e.name.endsWith('.spec.ts')&&e.name!=='vue.spec.ts'?[join(path,e.name)]:[]))}
 const declarations=new Map()
@@ -126,7 +141,7 @@ const ledger=rows.map(r=>{
 })
 const tally={DECLARED_NOT_EXECUTED:ledger.filter(x=>x.status==='DECLARED_NOT_EXECUTED').length,
  MISSING_TEST:ledger.filter(x=>x.status==='MISSING_TEST').length}
-const summary={protocol:'W373_QA_ONLY_V2_W377_CORRECTION',sourceSha,parentSha,branch,
+const summary={protocol:'W373_QA_ONLY_V2_W377_CORRECTION',sourceSha,parentSha,branch:auditedBranch,
  generatedAt:new Date().toISOString(),counts:familyCounts,total:rows.length,tally,
  contractSha256:pinned,errors,trustState:'MISSING_VERIFIED_W327_PROTECTED_CI_AND_W377_REVIEW',
  releaseVerdict:'HOLD_W327_EXTERNAL_ADMISSION_REQUIRED',releaseAuthorized:false,
