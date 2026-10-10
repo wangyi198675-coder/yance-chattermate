@@ -36,14 +36,16 @@ export function nativePgSnapshot(){
   throw Error('NATIVE_QA_CANONICAL_ORG_USER_CUSTOMER_SESSION_CHAT_IDS_REQUIRED')
  // Read exact PostgreSQL server identity as structured SQL (not pipe-split
  // strings). A real GH Windows run exposed an ambiguous provenance projection.
- const raw=postgres("SELECT json_build_object('database',current_database(),'server',COALESCE(inet_server_addr()::text,'local'),'epoch',extract(epoch from pg_postmaster_start_time())::bigint)::text")
- let identity:{database?:unknown,server?:unknown,epoch?:unknown}
+ // Compare INET values inside PostgreSQL, not its OS-dependent printable IPv6
+ // representation. Only exact IPv4/IPv6 loopback socket addresses qualify.
+ const raw=postgres("SELECT json_build_object('database',current_database(),'server',COALESCE(inet_server_addr()::text,'local'),'serverLoopback',COALESCE(inet_server_addr()=inet '127.0.0.1' OR inet_server_addr()=inet '::1' OR inet_server_addr()=inet '::ffff:127.0.0.1',false),'epoch',extract(epoch from pg_postmaster_start_time())::bigint)::text")
+ let identity:{database?:unknown,server?:unknown,serverLoopback?:unknown,epoch?:unknown}
  try{identity=JSON.parse(raw) as typeof identity}catch{throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:INVALID_POSTGRES_JSON')}
  const db=identity.database
  const server=identity.server
  const epoch=identity.epoch
  const dbQualified=typeof db==='string'&&/^(yance|chattermate)[a-z0-9_]*(_qa|_test)$/i.test(db)
- const serverQualified=typeof server==='string'&&['local','127.0.0.1','::1'].includes(server)
+ const serverQualified=typeof server==='string'&&identity.serverLoopback===true
  const epochQualified=(typeof epoch==='number'&&Number.isSafeInteger(epoch)&&epoch>1000000000)
  if(!dbQualified||!serverQualified||!epochQualified)
   throw Error('NATIVE_PG_ISOLATION_OR_RUNTIME_PROVENANCE_FAILED:'+JSON.stringify({

@@ -184,21 +184,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "NPM_CI_FAILED" }
           npx playwright install chromium
           if ($LASTEXITCODE -ne 0) { throw "PLAYWRIGHT_CHROMIUM_INSTALL_FAILED" }
-      - name: Start real ChatterMate app.main and Vue local-only
-        id: native_start
-        shell: pwsh
-        run: ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase start
-      - name: True PostgreSQL authenticated native Chromium 920x620 (RED remains RED)
+      - name: Real ChatterMate plus Chrome 920x620 and durable PostgreSQL restart in one Windows job
         id: native_real
-        working-directory: frontend
         shell: pwsh
         run: |
-          npx playwright test --project=chromium-native
-          if ($LASTEXITCODE -ne 0) { throw "REAL_NATIVE_CHROMIUM_FAILED" }
-      - name: Real native backend process restart and PostgreSQL readback
-        if: ${{ always() && steps.native_start.outcome == 'success' }}
-        shell: pwsh
-        run: ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase restart
+          # The first real GH Windows jobs proved detached native processes can
+          # disappear between Actions steps. Hold the same step open until
+          # BOTH real Chromium execution AND real process restart conclude.
+          ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase start
+          if (-not $?) { throw "REAL_NATIVE_BACKEND_OR_VUE_START_FAILED" }
+          Push-Location frontend
+          try {
+            npx playwright test --project=chromium-native
+            $nativeExit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          ./frontend/e2e/quality/hosted-windows-native.ps1 -Phase restart
+          if (-not $?) { throw "REAL_NATIVE_POSTGRES_RESTART_FAILED" }
+          if ($nativeExit -ne 0) { throw "REAL_NATIVE_CHROMIUM_FAILED" }
       - name: Capture CI self-observation (never official W362 approval)
         if: always()
         working-directory: frontend
