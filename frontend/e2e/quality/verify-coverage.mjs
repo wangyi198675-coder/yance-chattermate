@@ -12,7 +12,10 @@ const contractDir = options['contract-dir'] ? resolve(options['contract-dir']) :
 const mode=options.mode||'preflight'
 if (!['preflight','release'].includes(mode)) throw Error('INVALID_GATE_MODE')
 const sourceSha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim()
-const parentSha=execFileSync('git',['rev-parse','HEAD^'],{cwd:root,encoding:'utf8'}).trim()
+const ancestry=execFileSync('git',['rev-list','--parents','-n','1','HEAD'],{cwd:root,encoding:'utf8'}).trim().split(/\s+/)
+if(ancestry[0]!==sourceSha) throw Error('GIT_ANCESTRY_SHA_MISMATCH')
+const rootCommit=ancestry.length===1
+const parentSha=rootCommit?'':ancestry[1]
 const branch=execFileSync('git',['branch','--show-current'],{cwd:root,encoding:'utf8'}).trim()
 const errors=[]
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex').toUpperCase()
@@ -86,7 +89,8 @@ if(inject==='unknown-id')errors.push('INJECTED_UNKNOWN_REQUIREMENT')
 if(inject==='malformed-row')errors.push('MALFORMED_REQUIREMENT_ROW')
 if(inject==='stale-sha')errors.push('SOURCE_SHA_MISMATCH')
 if(!branch)errors.push('DETACHED_GIT_BRANCH')
-if(!sourceSha.match(/^[a-f0-9]{40}$/)||!parentSha.match(/^[a-f0-9]{40}$/))errors.push('INVALID_GIT_IDENTITY')
+if(!sourceSha.match(/^[a-f0-9]{40}$/)||(!rootCommit&&!parentSha.match(/^[a-f0-9]{40}$/)))errors.push('INVALID_GIT_IDENTITY')
+if(rootCommit && mode==='release')errors.push('ROOT_COMMIT_NO_PARENT_ATTESTATION')
 function specs(path){return !existsSync(path)?[]:readdirSync(path,{withFileTypes:true}).flatMap(e=>
  e.isDirectory()?specs(join(path,e.name)):(e.name.endsWith('.spec.ts')&&e.name!=='vue.spec.ts'?[join(path,e.name)]:[]))}
 const declarations=new Map()
