@@ -92,16 +92,16 @@ if ($Phase -eq 'prepare') {
  PutEnv 'YANCE_QA_PGSERVICE' 'nativeqa'
  PutEnv 'YANCE_QA_ISOLATED' '1'
  PutEnv 'YANCE_QA_FIXTURE' 'NATIVE_POSTGRES_AUTH'
- PutEnv 'YANCE_QA_NATIVE_URL' 'http://127.0.0.1:5173'
- PutEnv 'YANCE_QA_NATIVE_API_URL' 'http://127.0.0.1:8000'
+ PutEnv 'YANCE_QA_NATIVE_URL' 'http://localhost:5173'
+ PutEnv 'YANCE_QA_NATIVE_API_URL' 'http://localhost:8000'
  PutEnv 'ENVIRONMENT' 'development'
  PutEnv 'REDIS_ENABLED' 'false'
  PutEnv 'S3_FILE_STORAGE' 'false'
- PutEnv 'FRONTEND_URL' 'http://127.0.0.1:5173'
- PutEnv 'BACKEND_URL' 'http://127.0.0.1:8000'
+ PutEnv 'FRONTEND_URL' 'http://localhost:5173'
+ PutEnv 'BACKEND_URL' 'http://localhost:8000'
  PutEnv 'CORS_ORIGINS' '["http://127.0.0.1:5173","http://localhost:5173","http://127.0.0.1:8000"]'
- PutEnv 'VITE_API_URL' 'http://127.0.0.1:8000/api/v1'
- PutEnv 'VITE_WS_URL' 'ws://127.0.0.1:8000'
+ PutEnv 'VITE_API_URL' 'http://localhost:8000/api/v1'
+ PutEnv 'VITE_WS_URL' 'ws://localhost:8000'
  PutEnv 'JWT_SECRET_KEY' ([guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N'))
  PutEnv 'CONVERSATION_SECRET_KEY' ([guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N'))
  $qaPassword=([guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N'))

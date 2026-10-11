@@ -49,8 +49,22 @@ def db(monkeypatch):
     connection = None
     try:
         with admin_engine.connect() as admin:
-            # CREATE DATABASE ... TEMPLATE copies actual Alembic tables, indexes,
-            # constraints, PG-native types and committed data, not a SQLite mock.
+            # These tests clone only the explicitly validated disposable W381
+            # database. The suite may retain pooled idle connections to that
+            # template; PostgreSQL rejects CREATE DATABASE ... TEMPLATE until
+            # those sessions actually exit. Never terminate a production DB.
+            active = admin.execute(text(
+                "SELECT pid FROM pg_stat_activity WHERE datname = :template_db"
+            ), {"template_db": template_db}).scalars().all()
+            for pid in active:
+                terminated = admin.execute(text(
+                    "SELECT pg_terminate_backend(:pid, 5000)"
+                ), {"pid": pid}).scalar_one()
+                assert terminated, "Isolated W381 template still holds an active session"
+            assert admin.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = :template_db"
+            ), {"template_db": template_db}).scalar_one() == 0
+            # Preserve real Alembic schema, PG-native constraints and data.
             admin.exec_driver_sql(
                 f'CREATE DATABASE "{child_db}" TEMPLATE "{template_db}"'
             )
