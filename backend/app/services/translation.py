@@ -675,15 +675,17 @@ class DeepLTranslationOwner:
             if style_language is not None
             else os.getenv("DEEPL_TRANSLATION_STYLE_LANGUAGE", "")
         ).strip()
-        self.base_url = (
-            "https://api-free.deepl.com"
-            if self.api_key.endswith(":fx")
-            else "https://api.deepl.com"
-        )
+        # Only the official free endpoint is admitted for this release.
+        # A non-Free key must never silently route requests to a paid host.
+        self.base_url = "https://api-free.deepl.com"
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def free_plan_key_valid(self) -> bool:
+        return self.configured and self.api_key.endswith(":fx")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -698,14 +700,36 @@ class DeepLTranslationOwner:
                 "state": "not_configured",
                 "stylePolicy": STYLE_POLICY,
             }
+        if not self.free_plan_key_valid:
+            return {
+                "owner": self.owner_name,
+                "state": "needs_attention",
+                "stylePolicy": STYLE_POLICY,
+                "errorCode": "FREE_PLAN_KEY_REQUIRED",
+            }
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(f"{self.base_url}/v2/usage", headers=self._headers())
             if response.status_code == 200:
+                try:
+                    usage = response.json()
+                except ValueError:
+                    usage = None
+                count = usage.get("character_count") if isinstance(usage, dict) else None
+                limit = usage.get("character_limit") if isinstance(usage, dict) else None
+                # 200 alone does not imply that the free account has capacity.
+                if (type(count) is int and type(limit) is int
+                        and 0 <= count < limit):
+                    return {
+                        "owner": self.owner_name,
+                        "state": "connected",
+                        "stylePolicy": STYLE_POLICY,
+                    }
                 return {
                     "owner": self.owner_name,
-                    "state": "connected",
+                    "state": "needs_attention",
                     "stylePolicy": STYLE_POLICY,
+                    "errorCode": "FREE_QUOTA_EXHAUSTED_OR_UNKNOWN",
                 }
             return {
                 "owner": self.owner_name,
@@ -731,6 +755,8 @@ class DeepLTranslationOwner:
     ) -> ProviderTranslation:
         if not self.configured:
             raise TranslationProviderError("translation_owner_not_configured")
+        if not self.free_plan_key_valid:
+            raise TranslationProviderError("translation_free_plan_key_required")
         payload = build_deepl_payload(
             text,
             target_language=target_language,

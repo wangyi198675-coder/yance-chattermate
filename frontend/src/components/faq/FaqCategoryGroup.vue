@@ -43,7 +43,7 @@ const allSelected = () => props.selectedCount === props.count && props.count > 0
         type="checkbox"
         :checked="allSelected()"
         :indeterminate.prop="!!selectedCount && !allSelected()"
-        :aria-label="`Select all in ${category}`"
+        :aria-label="`全选${category}主题下的常见问题`"
         @click.stop
         @change="$emit('toggle-all', !allSelected())"
       />
@@ -61,7 +61,7 @@ const allSelected = () => props.selectedCount === props.count && props.count > 0
         ><path d="M9 6l6 6-6 6" /></svg>
         <span class="category-group__name">{{ category.toUpperCase() }}</span>
         <span class="category-group__count">
-          {{ count }} {{ count === 1 ? 'answer' : 'answers' }}<template v-if="publishedCount !== undefined"> · {{ publishedCount }} published</template>
+          共 {{ count }} 条常见问题<template v-if="publishedCount !== undefined"> · 已发布 {{ publishedCount }} 条</template>
         </span>
       </button>
       <div class="category-group__rule"></div>

@@ -102,5 +102,9 @@ def test_a_broken_row_scope_costs_the_catalogue_not_the_toolkit():
     assert toolkit.add_instructions is False
     # The tools themselves are still registered and usable.
     assert {"list_database_tables", "describe_database_table", "query_database"} <= set(
-        toolkit.functions
+        toolkit.get_async_functions()
     )
+    # Agno registers coroutine tools in async_functions rather than the
+    # synchronous-only functions mapping; the provider must still see them.
+    for name in ("list_database_tables", "describe_database_table", "query_database"):
+        assert toolkit.get_async_functions()[name].entrypoint is not None

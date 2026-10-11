@@ -1,0 +1,16 @@
+{
+  "name": "@yance/whatsapp-personal-transport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check runner.mjs && node --check core.mjs && node --check vault.mjs"
+  }
+}

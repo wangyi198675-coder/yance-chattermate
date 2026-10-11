@@ -22,7 +22,7 @@ import DashboardLayout from '@/layouts/DashboardLayout.vue'
 import { checkJiraConnection, getJiraAuthUrl, disconnectJira } from '@/services/jira'
 import { checkShopifyConnection, getShopifyShops } from '@/services/shopify'
 import channelsService, { type ChannelAccount } from '@/services/channels'
-import { lineAccountState } from '@/utils/lineAccountState'
+import { lineAccountState, lineAccountUsable } from '@/utils/lineAccountState'
 import { facebookMessengerConnectionState } from '@/yance/facebookMessengerConnectionState'
 import crmService, { type CrmConnection, type CrmProvider } from '@/services/crm'
 import TelegramConnectModal from '@/components/integrations/TelegramConnectModal.vue'
@@ -1237,7 +1237,7 @@ onMounted(async () => {
               <div class="line-account-identity">
                 <strong>{{ account.display_name || 'LINE channel' }}</strong>
                 <small>{{ account.external_account_id }}</small>
-                <small>{{ account.is_active ? 'Connected' : 'Needs attention' }}</small>
+                <small>{{ lineAccountUsable(account) ? 'Connected' : 'Needs attention' }}</small>
               </div>
               <div class="int-actions">
                 <button class="int-btn int-btn-manage" @click="manageLineAccount(account)">Manage</button>

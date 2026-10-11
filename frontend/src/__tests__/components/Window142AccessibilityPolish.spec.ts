@@ -184,15 +184,30 @@ describe('Window142 low-risk accessibility polish', () => {
     const drawer = wrapper.get('.notification-drawer')
     expect(drawer.attributes('role')).toBe('region')
     expect(drawer.attributes('aria-labelledby')).toBe('notification-drawer-title')
-    expect(wrapper.get('#notification-drawer-title').text()).toBe('Notifications')
-    expect(wrapper.get('.close-button').attributes('aria-label')).toBe('Close notifications')
+    expect(wrapper.get('#notification-drawer-title').text()).toBe('通知')
+    expect(wrapper.get('.close-button').attributes('aria-label')).toBe('关闭通知')
 
+    expect(wrapper.get('.refresh-button').attributes('title')).toBe('刷新通知')
+    expect(wrapper.findAll('.mark-all').map(button => button.text())).toEqual(['全部标记为已读', '清空通知'])
     const filters = wrapper.findAll('.filter-tab')
     expect(filters[0].attributes('aria-pressed')).toBe('true')
     expect(filters[1].attributes('aria-pressed')).toBe('false')
+    expect(filters.map(button => button.text())).toEqual(['全部', '未读'])
     await filters[1].trigger('click')
     expect(filters[0].attributes('aria-pressed')).toBe('false')
     expect(filters[1].attributes('aria-pressed')).toBe('true')
+  })
+
+  it('keeps native notification bulk actions operational under Chinese labels', async () => {
+    const wrapper = mount(NotificationList, { props: { isOpen: true } })
+    await flushPromises()
+    await wrapper.findAll('.mark-all')[0]!.trigger('click')
+    await flushPromises()
+    expect(mocks.markAllAsRead).toHaveBeenCalledOnce()
+    await wrapper.findAll('.mark-all')[1]!.trigger('click')
+    await flushPromises()
+    expect(mocks.clearAll).toHaveBeenCalledOnce()
+    expect(wrapper.findAll('.notification-item')).toHaveLength(0)
   })
 
   it('names the existing person drawer without claiming modal semantics', async () => {

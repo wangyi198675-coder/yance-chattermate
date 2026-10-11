@@ -393,8 +393,9 @@ const chatterMateButtonText = computed(() => {
       </div>
 
       <header class="page-header">
-        <h1 class="page-title">AI Configuration</h1>
-        <p class="page-subtitle">Your agents already run on ChatterMate AI. Switch to your own model any time — this is optional.</p>
+        <h1 class="page-title">AI 模型配置</h1>
+        <p v-if="hasExistingConfig" class="page-subtitle">已检测到当前工作区的活动模型配置，可在下方查看和修改。</p>
+        <p v-else class="page-subtitle">当前工作区尚未配置活动 AI 模型。选择服务商并完成连接后才能使用相关能力。</p>
       </header>
 
       <div class="tabs-container">
@@ -430,7 +431,7 @@ const chatterMateButtonText = computed(() => {
                 <path d="M8 11V8a4 4 0 0 1 8 0v3"></path>
               </svg>
             </span>
-            <span class="tab-label">Advanced — Bring Your Own Model</span>
+            <span class="tab-label">高级设置 · 使用自己的模型</span>
             <span v-if="hasEnterpriseModule && isCustomModelsLocked" class="lock-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
@@ -445,12 +446,14 @@ const chatterMateButtonText = computed(() => {
           <div v-if="activeTab === 'chattermate' && hasEnterpriseModule" class="chattermate-content">
             <div class="provider-info">
               <div class="provider-header">
-                <span class="active-pill">
+                <span v-if="hasExistingConfig && setupConfig.provider.toLowerCase() === 'chattermate'" class="active-pill">
                   <span class="active-dot"></span>
-                  <span class="active-text">ACTIVE</span>
+                  <span class="active-text">已连接</span>
                 </span>
+                <span v-else class="model-not-configured">尚未配置</span>
                 <h4>ChatterMate AI</h4>
-                <p class="provider-tagline">Zero setup. Managed models, ready instantly — this is the default.</p>
+                <p v-if="hasExistingConfig && setupConfig.provider.toLowerCase() === 'chattermate'" class="provider-tagline">此工作区使用 ChatterMate 托管模型。</p>
+                <p v-else class="provider-tagline">尚无活动的 ChatterMate 模型配置，不代表服务已连接。</p>
               </div>
 
               <div class="plan-table">
@@ -592,13 +595,13 @@ const chatterMateButtonText = computed(() => {
             <!-- Custom Models Form (when unlocked) -->
             <div v-else>
               <form @submit.prevent="handleSubmit" class="setup-form">
-                <h4 class="setup-title">Bring your own model</h4>
+                <h4 class="setup-title">连接自己的 AI 模型</h4>
                 <p class="setup-description">
-                  {{ hasExistingConfig ? 'Update your AI provider settings' : 'Connect a provider with your own API key. Full control, your rates.' }}
+                  {{ hasExistingConfig ? '更新当前模型服务商设置' : '使用自己的 API 密钥连接模型服务商，保存后再确认连接状态。' }}
                 </p>
 
                 <div class="form-group">
-                  <label>AI Provider</label>
+                  <label>AI 服务商</label>
                   <div class="provider-grid" role="radiogroup">
                     <button
                       v-for="provider in providers"

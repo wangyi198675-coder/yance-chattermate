@@ -809,7 +809,7 @@ def test_takeover_notifies_a_channel_customer_but_not_the_widget(
 
     web_session = create_chat_session()
     channel_session = create_chat_session()
-    channel_session.channel = 'telegram'
+    channel_session.channel = 'line'  # send-capable; Telegram is intentionally receive-only
     db.commit()
 
     with patch('app.services.human_routing.deliver_to_customer',
@@ -820,7 +820,13 @@ def test_takeover_notifies_a_channel_customer_but_not_the_widget(
 
         client_with_error_mock.post(
             f"/api/v1/session-to-agent/{channel_session.session_id}/takeover")
-        assert mock_deliver.called
+        assert mock_deliver.call_count == 1
+        telegram_session = create_chat_session()
+        telegram_session.channel = 'telegram'
+        db.commit()
+        client_with_error_mock.post(
+            f"/api/v1/session-to-agent/{telegram_session.session_id}/takeover")
+        assert mock_deliver.call_count == 1, "receive-only Telegram must never auto-send"
 
 
 def test_route_to_human_tells_a_channel_customer_someone_is_coming(
@@ -832,7 +838,7 @@ def test_route_to_human_tells_a_channel_customer_someone_is_coming(
     from app.services.message_delivery import DeliveryResult
 
     session = create_chat_session()
-    session.channel = 'telegram'
+    session.channel = 'line'  # send-capable external channel
     db.commit()
 
     with patch('app.services.human_routing.notify_chat_event', new=AsyncMock()), \

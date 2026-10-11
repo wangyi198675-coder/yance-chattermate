@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ChatDetail } from '@/types/chat'
 import { sessionToAgentService } from '@/services/sessionToAgent'
 import { yanceReplyService, type ReplyRuntimeProjection, type ReplyCandidateEnvelope } from '@/services/yanceReply'
 import YanceReplyBrainCandidateCard from './YanceReplyBrainCandidateCard.vue'
-import type { YanceReplyBrainCandidate, YanceReplyBrainStateProjection } from '../semanticTypes'
+import type { YanceReplyBrainCandidate, YanceReplyBrainStateProjection, YanceScopedTurnIntent } from '../semanticTypes'
 
 type AdoptMediaIntent = (intent: {
   type: 'voice' | 'photo' | 'image' | 'video' | 'file'
@@ -25,10 +25,13 @@ const props = defineProps<{
   initialDoNotLearn?: boolean
   recomputeToken?: number
   abortToken?: number
+  turnIntent?: YanceScopedTurnIntent | null
 }>()
 
 const emit = defineEmits<{
   (event: 'toggle'): void
+  (event: 'active-turn', identity: { sessionId: string; customerId: string; agentId: string; sourceMessageId: number | null }): void
+  (event: 'turn-intent-receipt', receipt: { nonce: number; accepted: boolean; undone?: boolean; detail: string }): void
 }>()
 
 const runtime = ref<ReplyRuntimeProjection | null>(null)
@@ -59,6 +62,15 @@ const durableRule = ref('')
 const durableScope = ref<'global' | 'contact'>('contact')
 const historyOpen = ref(false)
 const history = ref<Array<{ transaction_id: number; instructions: string }>>([])
+let turnIntentSnapshot: { sessionId: string; sourceMessageId: number; persona: string; goal: string; doNotLearn: boolean } | null = null
+const activeTurn = () => ({
+  sessionId: props.chat.session_id,
+  customerId: props.chat.customer.id,
+  agentId: props.chat.agent.id,
+  sourceMessageId: latestInboundId(),
+})
+const notifyActiveTurn = () => emit('active-turn', activeTurn())
+onMounted(notifyActiveTurn)
 
 const boundedCandidates = computed(() => candidates.value.slice(0, 5))
 const visibleCandidates = computed(() => boundedCandidates.value.slice(0, expanded.value ? 5 : 3))
@@ -140,9 +152,12 @@ const refreshRuntime = async () => {
     const turn = runtime.value.current_turn_controls
     if (turn && (turn.source_message_id !== lastHydratedTurnId || pendingTurnWrites === 0)) {
       lastHydratedTurnId = turn.source_message_id
-      // The canonical server row, not initial props or a stale browser cache, owns this turn.
-      currentGoal.value = turn.current_goal ?? ''
-      allowSensitiveContext.value = turn.allow_sensitive_context
+      // A pending operator edit must not be replaced by an earlier DB snapshot.
+      // The queued write still uses the canonical row/version for its CAS.
+      if (pendingTurnWrites === 0) {
+        currentGoal.value = turn.current_goal ?? ''
+        allowSensitiveContext.value = turn.allow_sensitive_context
+      }
     }
     const persisted = runtime.value.long_term_goal ?? ''
     if (!longTermGoalDirty.value || longTermGoal.value === storedLongTermGoal.value) {
@@ -427,6 +442,67 @@ const rollback = async (transactionId: number) => {
     error.value = 'learning_rollback_unavailable'
   }
 }
+
+watch(
+  () => props.turnIntent,
+  intent => {
+    if (!intent) return
+    const identity = activeTurn()
+    const valid = intent.sessionId === identity.sessionId
+      && intent.customerId === identity.customerId && intent.agentId === identity.agentId
+      && intent.sourceMessageId === identity.sourceMessageId && identity.sourceMessageId !== null
+    if (!valid) {
+      emit('turn-intent-receipt', { nonce: intent.nonce, accepted: false, detail: '联系人或最新消息已变化；未应用本轮意图。' })
+      return
+    }
+    if (intent.action === 'undo') {
+      if (!turnIntentSnapshot || turnIntentSnapshot.sessionId !== identity.sessionId
+          || turnIntentSnapshot.sourceMessageId !== identity.sourceMessageId) {
+        emit('turn-intent-receipt', { nonce: intent.nonce, accepted: false, detail: '当前回合没有可撤销的意图。' })
+        return
+      }
+      currentTurnPersona.value = turnIntentSnapshot.persona
+      currentGoal.value = turnIntentSnapshot.goal
+      doNotLearn.value = turnIntentSnapshot.doNotLearn
+      turnIntentSnapshot = null
+      abortGeneration()
+      emit('turn-intent-receipt', { nonce: intent.nonce, accepted: true, undone: true, detail: '已撤销本轮覆盖；旧候选已作废，未发送消息。' })
+      return
+    }
+    if (!intent.currentTurnPersona || intent.currentTurnPersona.length > 1600
+        || /[\u0000-\u001f\u007f]/.test(intent.currentTurnPersona)) {
+      emit('turn-intent-receipt', { nonce: intent.nonce, accepted: false, detail: '本轮人格内容无效或超出原生 1600 字限制。' })
+      return
+    }
+    if (!turnIntentSnapshot) {
+      turnIntentSnapshot = {
+        sessionId: identity.sessionId, sourceMessageId: identity.sourceMessageId!,
+        persona: currentTurnPersona.value, goal: currentGoal.value, doNotLearn: doNotLearn.value,
+      }
+    }
+    currentTurnPersona.value = intent.currentTurnPersona
+    if (intent.currentGoal !== undefined) currentGoal.value = intent.currentGoal
+    if (intent.doNotLearn !== undefined) doNotLearn.value = intent.doNotLearn
+    abortGeneration()
+    emit('turn-intent-receipt', { nonce: intent.nonce, accepted: true, detail: '已进入当前 Reply Brain 的本轮设置。请重新生成建议；没有发送或学习。' })
+  },
+  { flush: 'sync' },
+)
+
+watch(
+  () => [props.chat.session_id, props.chat.customer.id, props.chat.agent.id, latestInboundId()],
+  (_, previous) => {
+    if (previous) {
+      turnIntentSnapshot = null
+      currentTurnPersona.value = ''
+      currentTurnCorrection.value = ''
+      currentGoal.value = ''
+      doNotLearn.value = Boolean(props.initialDoNotLearn)
+    }
+    notifyActiveTurn()
+  },
+  { flush: 'sync' },
+)
 
 watch(
   () => props.chat.session_id,

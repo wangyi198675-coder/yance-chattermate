@@ -15,7 +15,7 @@ limitations under the License.
 -->
 
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { useTheme } from '@/composables/useTheme'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
@@ -44,9 +44,54 @@ const props = defineProps<{
 
 // Initialize sidebar state based on current route and screen size
 const route = useRoute()
-// The /yance workspace reuses this native layout, but never the upstream CRM menu.
-const isYanceRoute = computed(() => route.path === '/yance' || route.path.startsWith('/yance/'))
-const showUpstreamSidebar = computed(() => !props.hideSidebar && !isYanceRoute.value)
+const router = useRouter()
+// Keep the native business views and all their API/permission owners. Only the
+// layout changes when navigation actually originates in the Yance workspace.
+const isYancePath = (path: string) => path === '/yance' || path.startsWith('/yance/')
+const isYanceRoute = computed(() => isYancePath(route.path))
+const yanceNativeLabels: Record<string, string> = {
+    '/ai-agents': 'AI 智能体',
+    '/knowledge': '知识库',
+    '/tickets': '工单',
+    '/analytics': '数据分析',
+    '/faq': '帮助中心',
+    '/settings/ai-config': 'AI 模型配置',
+    '/settings/widget-apps': '小组件',
+}
+const isYanceNativePath = (path: string) =>
+    Object.prototype.hasOwnProperty.call(yanceNativeLabels, path) || path.startsWith('/tickets/')
+const yanceNativeLabel = computed(() =>
+    route.path.startsWith('/tickets/') ? '工单详情' : yanceNativeLabels[route.path] || ''
+)
+// The launch marker lives on this browser-history ENTRY, not in sessionStorage
+// or a referrer heuristic. It survives reload/back/forward, while a standalone
+// /knowledge URL remains the genuine upstream dashboard.
+const hasNativeLaunch = () => window.history.state?.yanceNativeLaunch === true
+const yanceNativeOrigin = ref(isYanceNativePath(route.path) && hasNativeLaunch())
+const nativeReturnTo = ref('/yance')
+const safeYanceReturn = (value: unknown) =>
+    typeof value === 'string' && isYancePath(value.split(/[?#]/)[0]) && !value.startsWith('//')
+        ? value : '/yance'
+if (yanceNativeOrigin.value) nativeReturnTo.value = safeYanceReturn(window.history.state?.yanceNativeReturnTo)
+let nativePopNavigation = false
+const onNativePop = () => { nativePopNavigation = true }
+window.addEventListener('popstate', onNativePop)
+// Carry context only through new native-to-native navigations, never through
+// an unrelated route, history traversal, an external direct entry or a 403.
+const removeNativeRouteHook = router.afterEach((to, from, failure) => {
+    if (failure) { nativePopNavigation = false; return }
+    if (isYanceNativePath(to.path) && isYanceNativePath(from.path) &&
+        yanceNativeOrigin.value && !nativePopNavigation && !hasNativeLaunch()) {
+        window.history.replaceState({
+            ...window.history.state,
+            yanceNativeLaunch: true,
+            yanceNativeReturnTo: nativeReturnTo.value,
+        }, '')
+    }
+    nativePopNavigation = false
+})
+const isYanceNativeShell = computed(() => isYanceNativePath(route.path) && yanceNativeOrigin.value)
+const showUpstreamSidebar = computed(() => !props.hideSidebar && !isYanceRoute.value && !isYanceNativeShell.value)
 const { isMobile: isPhone, isTablet: isMobile } = useBreakpoint()
 const isSidebarOpen = ref(
     route.path !== '/conversations' && !isMobile.value
@@ -69,7 +114,10 @@ const themeTitle = computed(() =>
 // Attaches push listeners when permission is already granted; the permission
 // request itself only happens from the EnablePushPrompt user gesture.
 const { enableNotifications } = useNotifications()
-const router = useRouter()
+onBeforeUnmount(() => {
+    removeNativeRouteHook()
+    window.removeEventListener('popstate', onNativePop)
+})
 
 const PAGE_TITLES: Record<string, string> = {
     '/ai-agents': 'AI Agents',
@@ -136,19 +184,27 @@ const showBottomNav = computed(() =>
     isPhone.value &&
     !props.hideSidebar &&
     !isYanceRoute.value &&
+    !isYanceNativeShell.value &&
     !(route.path === '/conversations' && route.query.session)
 )
 
 // Watch for route changes to update sidebar state and close menus
 watch(
-  () => route.path,
-  (newPath) => {
+  () => route.fullPath,
+  () => {
+    const newPath = route.path
     showUserMenu.value = false
     showNotifications.value = false
     showMoreSheet.value = false
 
+    // Each history entry is independently attributable. An upstream URL
+    // typed directly has no marker, including after a prior Yance visit.
+    yanceNativeOrigin.value = isYanceNativePath(newPath) && hasNativeLaunch()
+    nativeReturnTo.value = yanceNativeOrigin.value
+      ? safeYanceReturn(window.history.state?.yanceNativeReturnTo) : '/yance'
+
     // Set sidebar state based on route and screen size
-    if (newPath === '/conversations' || isYanceRoute.value) {
+    if (newPath === '/conversations' || isYanceRoute.value || isYanceNativeShell.value) {
       isSidebarOpen.value = false // Collapsed for conversations
     } else if (isMobile.value) {
       isSidebarOpen.value = false // Collapsed on mobile by default
@@ -218,6 +274,7 @@ const layoutClasses = computed(() => ({
     'fullscreen-workflow': props.hideSidebar && props.hideHeader,
     'has-bottom-nav': showBottomNav.value,
     'yance-workspace': isYanceRoute.value,
+    'yance-native-management': isYanceNativeShell.value,
     'yance-conversation': route.path === '/yance'
 }))
 
@@ -246,7 +303,7 @@ const openNotificationsFromSheet = () => {
         <!-- Main Content -->
         <div class="main-content">
             <!-- Message Limit Warning Banner -->
-            <div v-if="!props.hideHeader && !isYanceRoute && hasEnterpriseModule && showMessageLimitWarning && messageLimitStatus"
+            <div v-if="!props.hideHeader && !isYanceRoute && !isYanceNativeShell && hasEnterpriseModule && showMessageLimitWarning && messageLimitStatus"
                  class="message-limit-banner"
                  :class="messageLimitStatus.type">
                 <div class="banner-content">
@@ -282,9 +339,36 @@ const openNotificationsFromSheet = () => {
 
             <!-- Promo offer surfaces (strip, usage nudge, first-landing popup) -->
             <PromoSurfaces
-                v-if="!props.hideHeader && !isYanceRoute && hasEnterpriseModule"
+                v-if="!props.hideHeader && !isYanceRoute && !isYanceNativeShell && hasEnterpriseModule"
                 :hide-usage-card="showMessageLimitWarning"
             />
+
+            <!-- A Yance-owned carrier around the real ChatterMate business slot:
+                 no duplicated Agent/Knowledge/Ticket CRUD, no fake status. -->
+            <nav v-if="isYanceNativeShell" class="yance-native-toolbar" aria-label="言策原生功能导航" data-yance-native-carrier>
+                <div class="yance-native-breadcrumb">
+                    <strong>言策</strong>
+                    <router-link :to="nativeReturnTo">言策工作区</router-link>
+                    <span aria-hidden="true">/</span>
+                    <span class="yance-native-current">{{ yanceNativeLabel }}</span>
+                </div>
+                <div class="yance-native-commands">
+                    <button type="button" class="yance-native-notification" @click="showNotifications = !showNotifications"
+                        :aria-expanded="showNotifications" aria-label="查看真实业务通知">
+                        通知<span v-if="unreadCount > 0"> ({{ unreadCount > 99 ? '99+' : unreadCount }})</span>
+                    </button>
+                    <router-link :to="nativeReturnTo" class="yance-native-return">返回言策</router-link>
+                </div>
+            </nav>
+            <p v-if="isYanceNativeShell && route.path === '/knowledge'"
+               class="yance-native-guidance" data-yance-knowledge-native-guidance>
+                知识库使用原生业务数据与权限。若下方显示 0 个知识来源，请使用页面里的原生新增入口；
+                当前没有知识记录不等于服务未连接，也不会自动生成示例数据。原生正文可能仍有英文。
+            </p>
+            <nav v-if="isYanceNativeShell" class="yance-native-sections" aria-label="原生能力页面">
+                <router-link v-for="(label, path) in yanceNativeLabels" :key="path" :to="path"
+                    :aria-current="route.path === path ? 'page' : undefined">{{ label }}</router-link>
+            </nav>
 
             <!-- Always reachable for a genuinely empty tenant; native components own the other page navigation. -->
             <nav v-if="route.path === '/yance'" class="yance-primary-navigation" aria-label="言策主导航" data-yance-primary-navigation>
@@ -296,7 +380,7 @@ const openNotificationsFromSheet = () => {
             </nav>
 
             <!-- Header -->
-            <header v-if="!props.hideHeader && !isYanceRoute" class="header">
+            <header v-if="!props.hideHeader && !isYanceRoute && !isYanceNativeShell" class="header">
                 <div class="header-content">
                     <div class="left-section">
                         <!-- Hamburger menu for mobile -->
@@ -386,7 +470,7 @@ const openNotificationsFromSheet = () => {
             <!-- Footer: omitted for full-page layouts (hideHeader, e.g. ConversationsView) —
                  those pages size .content to a fixed 100vh, so a footer still taking up
                  real space at the bottom clips the last message / message input out of view. -->
-            <footer v-if="!props.hideHeader && !isYanceRoute" class="footer">
+            <footer v-if="!props.hideHeader && !isYanceRoute && !isYanceNativeShell" class="footer">
                 <div class="footer-content">
                     <p>&copy; 2024 ChatterMate. All rights reserved.</p>
                     <nav class="footer-links">
@@ -402,7 +486,7 @@ const openNotificationsFromSheet = () => {
         <NotificationList v-if="!isYanceRoute" :is-open="showNotifications" @close="showNotifications = false"
             @notification-read="fetchUnreadCount" />
 
-        <EnablePushPrompt v-if="!isYanceRoute" @enable="enableNotifications" />
+        <EnablePushPrompt v-if="!isYanceRoute && !isYanceNativeShell" @enable="enableNotifications" />
 
         <!-- Mobile app shell -->
         <BottomNav
@@ -412,7 +496,7 @@ const openNotificationsFromSheet = () => {
             @more="showMoreSheet = true"
         />
         <MoreSheet
-            v-if="!isYanceRoute"
+            v-if="!isYanceRoute && !isYanceNativeShell"
             :open="showMoreSheet"
             :is-online="currentUser?.is_online"
             :status-updating="statusUpdating"
@@ -1416,4 +1500,102 @@ const openNotificationsFromSheet = () => {
 .yance-primary-navigation a { color: var(--muted); text-decoration: none; }
 .yance-primary-navigation a.router-link-exact-active { color: var(--text); font-weight: 600; }
 .yance-primary-navigation a:focus-visible { outline: 2px solid var(--accent-solid); outline-offset: 2px; }
+
+/* G04: Yance navigation around unchanged native CRUD views (not a second app). */
+.dashboard-layout.yance-native-management {
+    grid-template-columns: minmax(0, 1fr);
+    background: var(--bg);
+}
+.dashboard-layout.yance-native-management > .main-content {
+    height: 100dvh;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+.dashboard-layout.yance-native-management > .main-content > .content {
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    overflow: auto;
+    padding: 16px 20px;
+}
+.yance-native-guidance {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 9px 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--o08);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.yance-native-toolbar, .yance-native-sections {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--o08);
+    color: var(--text);
+    font-size: 12px;
+}
+.yance-native-toolbar {
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding: 8px 16px;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+.yance-native-breadcrumb, .yance-native-commands {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+}
+.yance-native-breadcrumb strong { color: var(--accent-ink); font-size: 14px; }
+.yance-native-current { font-weight: 700; }
+.yance-native-toolbar a, .yance-native-sections a {
+    color: var(--text3);
+    text-decoration: none;
+}
+.yance-native-toolbar a:hover, .yance-native-sections a:hover { color: var(--text); }
+.yance-native-toolbar a:focus-visible, .yance-native-sections a:focus-visible,
+.yance-native-notification:focus-visible {
+    outline: 2px solid var(--accent-solid);
+    outline-offset: 2px;
+}
+.yance-native-toolbar .yance-native-return {
+    border: 1px solid var(--o18);
+    border-radius: 8px;
+    padding: 6px 11px;
+    color: var(--text);
+}
+.yance-native-notification {
+    border: 1px solid var(--o14);
+    border-radius: 8px;
+    padding: 6px 10px;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+}
+.yance-native-sections {
+    flex: 0 0 36px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    padding: 0 16px;
+}
+.yance-native-sections a {
+    display: inline-flex;
+    height: 100%;
+    align-items: center;
+    flex: 0 0 auto;
+}
+.yance-native-sections a[aria-current="page"] {
+    color: var(--text);
+    font-weight: 700;
+    box-shadow: inset 0 -2px var(--accent-solid);
+}
 </style>

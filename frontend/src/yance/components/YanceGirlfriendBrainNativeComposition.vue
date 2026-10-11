@@ -13,6 +13,7 @@ const props = defineProps<{
   imageReadiness: YanceCapabilityReadinessProjection
   videoReadiness: YanceCapabilityReadinessProjection
   orchestration?: YanceGirlfriendOrchestrationProjection
+  intentFeedback?: { state: 'pending' | 'ready' | 'error'; detail: string; undoAvailable?: boolean } | null
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +28,6 @@ const scope = ref<YanceGirlfriendScope>('turn')
 const personaNote = ref('')
 const goalNote = ref('')
 const turnOnly = ref(true)
-const staged = ref(false)
 
 const canStage = computed(() => instruction.value.trim().length > 0)
 const orchestrationState = computed(() => props.orchestration?.state ?? 'idle')
@@ -57,7 +57,6 @@ const stageIntent = () => {
     goalNote: goalNote.value.trim() || undefined,
     turnOnly: turnOnly.value,
   })
-  staged.value = true
 }
 </script>
 
@@ -215,8 +214,9 @@ const stageIntent = () => {
         </p>
       </section>
 
-      <div v-if="staged" class="girlfriend-brain__receipt" data-yance-girlfriend-receipt>
-        已整理到本轮意图草稿。最终回复仍需回到对话输入框确认并发送。
+      <div v-if="props.intentFeedback" class="girlfriend-brain__receipt" data-yance-girlfriend-receipt :data-receipt-state="props.intentFeedback.state">
+        {{ props.intentFeedback.detail }}
+        <button v-if="props.intentFeedback.undoAvailable" type="button" data-yance-girlfriend-local-undo @click="emit('undo-request')">撤销本轮意图</button>
       </div>
     </section>
 

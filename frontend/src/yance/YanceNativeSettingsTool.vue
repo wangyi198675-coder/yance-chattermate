@@ -5,11 +5,13 @@ import DashboardLayout from '@/layouts/DashboardLayout.vue'
 import AISetup from '@/components/ai/AISetup.vue'
 import UserSettings from '@/components/user/UserSettings.vue'
 import Organizations from '@/components/organization/Organizations.vue'
+import { useAISetup } from '@/composables/useAISetup'
 
 const route = useRoute()
 const router = useRouter()
 const tool = computed(() => String(route.params.tool || ''))
 const confirmed = ref(false)
+const { isLoading: aiLoading, error: aiError, hasExistingConfig } = useAISetup()
 watch(tool, () => { confirmed.value = false })
 const names: Record<string, string> = {
   ai: 'AI 与模型管理',
@@ -27,6 +29,10 @@ const names: Record<string, string> = {
       <p v-if="!names[tool]" role="alert">此设置入口不存在。</p>
       <template v-else>
         <p class="note">这里复用现有配置与权限，不另存一套账号、模型或个人资料。</p>
+        <p v-if="tool==='ai'" class="note ai-truth" data-yance-ai-admin-truth
+          :data-ai-config-state="aiLoading ? 'loading' : aiError ? 'error' : hasExistingConfig ? 'stored-not-verified' : 'not-configured'">
+          {{ aiLoading ? '正在读取原生 AIConfig…' : aiError ? '原生 AIConfig 无法读取，不能确认模型已配置或可用。' : hasExistingConfig ? '已经保存模型配置；实际 Agno 推理尚未验证，不代表 AI 已连接。' : '原生 AIConfig 尚未配置（HTTP 404 表示不存在配置）；目前不能执行已配置模型的推理。' }}
+        </p>
         <section v-if="!confirmed" class="confirm-admin" data-yance-advanced-consent>
           <h2>{{ tool === 'organization' ? '工作区高级设置' : '进入原生高级配置' }}</h2>
           <p v-if="tool === 'organization'">后续是系统级管理表单，可能影响整个工作区，请确认后继续。</p>

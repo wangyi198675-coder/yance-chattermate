@@ -41,14 +41,14 @@ const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const types: { key: SourceKind; title: string; sub: string }[] = [
-  { key: 'website', title: 'Website', sub: 'Crawl a page or whole site' },
-  { key: 'sitemap', title: 'Sitemap', sub: 'Index every listed page' },
-  { key: 'pdf', title: 'Document', sub: 'PDF file, up to 25 MB' },
-  { key: 'text', title: 'Text', sub: 'Paste content directly' },
+  { key: 'website', title: '网站', sub: '抓取单个页面或整个网站' },
+  { key: 'sitemap', title: '站点地图', sub: '收录列出的所有页面' },
+  { key: 'pdf', title: '文档', sub: '支持单个不超过 25 MB 的 PDF' },
+  { key: 'text', title: '文本', sub: '直接粘贴内容' },
 ]
 
 const willQueue = computed(() => kind.value !== 'text')
-const submitLabel = computed(() => (kind.value === 'text' ? 'Add page' : 'Add to crawl queue'))
+const submitLabel = computed(() => (kind.value === 'text' ? '添加页面' : '加入抓取队列'))
 
 const canSubmit = computed(() => {
   if (props.submitting) return false
@@ -83,28 +83,28 @@ const scopes = computed<{ key: CrawlScope; title: string; sub: string }[]>(() =>
   const host = seedHost.value
   const section = seedSection.value
   return [
-    { key: 'page', title: 'This page only', sub: 'Index just the URL above.' },
+    { key: 'page', title: '仅此页面', sub: '只收录上方网址对应的页面。' },
     ...(section
       ? [
           {
             key: 'path' as CrawlScope,
-            title: 'This section',
-            sub: `Only pages under ${section}/ on ${host}.`,
+            title: '此路径下的页面',
+            sub: `仅抓取 ${host} 网站 ${section}/ 路径下的页面。`,
           },
         ]
       : []),
     {
       key: 'host',
-      title: 'This site',
-      sub: host ? `Every page on ${host}.` : 'Every page on the same host.',
+      title: '整个网站',
+      sub: host ? `抓取 ${host} 上的全部页面。` : '抓取同一主机上的全部页面。',
     },
     {
       key: 'domain',
       // No domain name in the copy on purpose: working out that
       // paywithatoa.co.uk is one registrable domain (not 'co.uk') needs the
       // ccTLD list the backend keeps, and a second copy of it would drift.
-      title: 'Whole domain',
-      sub: 'Also other subdomains — blog, docs, app.',
+      title: '整个域名',
+      sub: '包含博客、文档、应用等子域名。',
     },
   ]
 })
@@ -151,13 +151,13 @@ function submit() {
 
 <template>
   <div class="scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Add knowledge source">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="添加知识来源">
       <div class="modal__head">
         <div>
-          <h3 class="modal__title">Add knowledge source</h3>
-          <p class="modal__sub">Pick a source type — we crawl and index it in the background.</p>
+          <h3 class="modal__title">添加知识来源</h3>
+          <p class="modal__sub">选择来源类型，后台会按需抓取和收录内容。</p>
         </div>
-        <button class="icon-btn" type="button" aria-label="Close" @click="emit('close')">
+        <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
@@ -180,10 +180,10 @@ function submit() {
       <div class="body">
         <!-- website -->
         <template v-if="kind === 'website'">
-          <label class="field-label" for="kb-add-url">PAGE URL</label>
+          <label class="field-label" for="kb-add-url">页面网址</label>
           <input id="kb-add-url" v-model="url" class="text-input" type="text"
             placeholder="https://docs.yourcompany.com/help" @keyup.enter="submit" />
-          <label class="field-label">CRAWL SCOPE</label>
+          <label class="field-label">抓取范围</label>
           <div class="scope">
             <button v-for="opt in scopes" :key="opt.key" type="button" class="scope__opt"
               :class="{ 'scope__opt--active': scope === opt.key }" @click="scope = opt.key">
@@ -195,17 +195,17 @@ function submit() {
             </button>
           </div>
           <p v-if="scope !== 'page'" class="scope__hint">
-            Linked pages are discovered and queued, up to your plan limit.
+            发现的相关页面将按当前可用额度加入抓取队列。
           </p>
         </template>
 
         <!-- sitemap -->
         <template v-else-if="kind === 'sitemap'">
-          <label class="field-label" for="kb-add-sitemap">SITEMAP URL</label>
+          <label class="field-label" for="kb-add-sitemap">站点地图网址</label>
           <input id="kb-add-sitemap" v-model="url" class="text-input" type="text"
             placeholder="https://yourcompany.com/sitemap.xml" @keyup.enter="submit" />
           <div class="note note--teal">
-            We read the sitemap, then queue every listed page for crawling. Large sitemaps process in batches.
+            系统读取站点地图后，将列出的页面加入抓取队列；大型站点地图会分批处理。
           </div>
         </template>
 
@@ -222,34 +222,34 @@ function submit() {
             <input ref="fileInput" type="file" accept="application/pdf" multiple class="hidden-file"
               @change="onFilesSelected" />
             <span v-if="files.length" class="drop__name">{{ files.map((f) => f.name).join(', ') }}</span>
-            <span v-else class="drop__name">Drop a PDF or click to browse</span>
-            <span class="drop__hint">PDF files · up to 25 MB each</span>
+            <span v-else class="drop__name">拖入 PDF，或点击选择文件</span>
+            <span class="drop__hint">PDF 文件，每个不超过 25 MB</span>
           </div>
           <div class="note note--coral">
-            We extract the text, split it into sections, and index each one. Scanned PDFs are run through OCR.
+            系统会提取文本并分段建立索引；扫描版 PDF 将进行文字识别。
           </div>
         </template>
 
         <!-- text -->
         <template v-else>
-          <label class="field-label" for="kb-add-title">TITLE</label>
-          <input id="kb-add-title" v-model="title" class="text-input" type="text" placeholder="e.g. Refund policy" />
-          <label class="field-label" for="kb-add-content">CONTENT</label>
+          <label class="field-label" for="kb-add-title">标题</label>
+          <input id="kb-add-title" v-model="title" class="text-input" type="text" placeholder="例如：退款政策" />
+          <label class="field-label" for="kb-add-content">内容</label>
           <textarea id="kb-add-content" v-model="content" class="textarea"
-            placeholder="Paste or type the content your agents should learn…"></textarea>
+            placeholder="粘贴或输入需要提供给智能体参考的内容…"></textarea>
         </template>
       </div>
 
       <div class="foot">
         <span class="foot__note">
           <span class="foot__dot" :class="willQueue ? 'foot__dot--queue' : 'foot__dot--instant'"></span>
-          <template v-if="willQueue">Queued for crawling — you’ll be notified when it’s indexed.</template>
-          <template v-else>Added instantly — no crawling needed.</template>
+          <template v-if="willQueue">已加入抓取队列，完成索引后会通知你。</template>
+          <template v-else>直接添加，无需抓取。</template>
         </span>
         <div class="foot__actions">
-          <button class="btn btn--ghost" type="button" :disabled="submitting" @click="emit('close')">Cancel</button>
+          <button class="btn btn--ghost" type="button" :disabled="submitting" @click="emit('close')">取消</button>
           <button class="btn btn--primary" type="button" :disabled="!canSubmit" @click="submit">
-            {{ submitting ? 'Adding…' : submitLabel }}
+            {{ submitting ? '正在添加…' : submitLabel }}
           </button>
         </div>
       </div>

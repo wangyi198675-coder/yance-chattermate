@@ -117,13 +117,16 @@ const handleInputSync = (event: Event) => {
 
 // MutationObserver to detect DOM changes and re-setup listeners
 let domObserver: MutationObserver | null = null
+let isDisposed = false
 
 const setupDOMObserver = () => {
+    if (isDisposed) return
     if (domObserver) {
         domObserver.disconnect()
     }
 
     domObserver = new MutationObserver((mutations) => {
+        if (isDisposed) return
         let shouldResetup = false
         let hasNewInputFields = false
 
@@ -157,7 +160,8 @@ const setupDOMObserver = () => {
             // Debounce to avoid excessive calls
             clearTimeout(setupDOMObserver.timeoutId)
             setupDOMObserver.timeoutId = setTimeout(() => {
-                setupNativeEventListeners()
+                setupDOMObserver.timeoutId = null
+                if (!isDisposed) setupNativeEventListeners()
             }, hasNewInputFields ? 50 : 100) // Faster setup for new inputs
         }
     })
@@ -182,9 +186,10 @@ let currentInputFields: HTMLElement[] = []
 const pendingListenerSetups = new Set<ReturnType<typeof setTimeout>>()
 
 const scheduleNativeListenerSetup = (delayMs: number) => {
+    if (isDisposed) return
     const timer = setTimeout(() => {
         pendingListenerSetups.delete(timer)
-        setupNativeEventListeners()
+        if (!isDisposed) setupNativeEventListeners()
     }, delayMs)
     pendingListenerSetups.add(timer)
 }
@@ -196,6 +201,7 @@ const cancelPendingListenerSetups = () => {
 
 // Setup native DOM event listeners as fallback
 const setupNativeEventListeners = () => {
+    if (isDisposed) return
     // Clean up existing listeners first
     cleanupNativeEventListeners()
 
@@ -246,11 +252,11 @@ const setupNativeEventListeners = () => {
 // Clean up native event listeners
 const cleanupNativeEventListeners = () => {
     currentInputFields.forEach((input) => {
-        input.removeEventListener('input', handleNativeInput)
-        input.removeEventListener('keyup', handleNativeInput)
-        input.removeEventListener('change', handleNativeInput)
-        input.removeEventListener('keypress', handleNativeKeyPress)
-        input.removeEventListener('keydown', handleNativeKeyDown)
+        input.removeEventListener('input', handleNativeInput, true)
+        input.removeEventListener('keyup', handleNativeInput, true)
+        input.removeEventListener('change', handleNativeInput, true)
+        input.removeEventListener('keypress', handleNativeKeyPress, true)
+        input.removeEventListener('keydown', handleNativeKeyDown, true)
     })
     currentInputFields = []
 }
@@ -1267,17 +1273,51 @@ const adoptHostToken = async (hostToken: unknown) => {
     await initializeWidget()
 }
 
+// Each missing-widgetId wait is tracked so unmount can cancel its timer AND
+// settle the await. More than one initialization can be pending (mount + token
+// refresh), so a single timer slot would leave other waits alive.
+const pendingWidgetIdPolls = new Set<{
+    timer: ReturnType<typeof setTimeout>
+    finish: () => void
+}>()
+
+const waitForWidgetId = () => new Promise<void>(resolve => {
+    if (isDisposed) {
+        resolve()
+        return
+    }
+    const poll = {
+        timer: null as unknown as ReturnType<typeof setTimeout>,
+        finish: () => {
+            pendingWidgetIdPolls.delete(poll)
+            resolve()
+        }
+    }
+    poll.timer = setTimeout(poll.finish, 100)
+    pendingWidgetIdPolls.add(poll)
+})
+
+const cancelPendingWidgetIdPolls = () => {
+    for (const poll of pendingWidgetIdPolls) {
+        clearTimeout(poll.timer)
+        poll.finish()
+    }
+}
+
 // Initialize widget - main initialization logic
 const initializeWidget = async () => {
+    if (isDisposed) return false
     try {
         // Wait for window.__INITIAL_DATA__ to be available
         let attempts = 0
         const maxAttempts = 50 // 5 seconds max wait
-        while (!window.__INITIAL_DATA__?.widgetId && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 100))
+        while (!isDisposed && !window.__INITIAL_DATA__?.widgetId && attempts < maxAttempts) {
+            await waitForWidgetId()
+            if (isDisposed) return false
             attempts++
         }
 
+        if (isDisposed) return false
         if (!window.__INITIAL_DATA__?.widgetId) {
             console.error('Widget data not available after waiting')
             return false
@@ -1287,6 +1327,7 @@ const initializeWidget = async () => {
         setWidgetId(window.__INITIAL_DATA__.widgetId)
 
         const isAuthorized = await checkAuthorization()
+        if (isDisposed) return false
 
         if (!isAuthorized) {
             connectionStatus.value = 'connected'
@@ -1296,11 +1337,12 @@ const initializeWidget = async () => {
         // For refresh cases, also check if we need to get workflow state
         if (window.__INITIAL_DATA__?.workflow && hasConversationToken.value) {
             await getWorkflowState()
+            if (isDisposed) return false
         }
 
         return true
     } catch (error) {
-        console.error('Failed to initialize widget:', error)
+        if (!isDisposed) console.error('Failed to initialize widget:', error)
         return false
     }
 }
@@ -1311,7 +1353,8 @@ const initializeWidget = async () => {
 // which would race that gap and be dropped.
 // (The handler bodies run on later macrotasks, so refs declared further down —
 // parentDisplay — are initialized by the time they're touched.)
-window.addEventListener('message', (event) => {
+const handleHostMessage = (event: MessageEvent) => {
+    if (isDisposed) return
     // Only the embedding page (the loader, or the dashboard preview) may drive the
     // widget; hostile sibling frames can reach this window via top.frames[i].
     if (event.source !== window.parent) return
@@ -1351,13 +1394,17 @@ window.addEventListener('message', (event) => {
         // Prefill (never auto-send) the chat input, e.g. ChatterMate.open({ message }).
         newMessage.value = event.data.text.slice(0, 2000)
         nextTick(() => {
+            // The host event may be trusted and queued before unmount. The queued
+            // callback must not touch the detached document after teardown.
+            if (isDisposed) return
             const input = document.querySelector<HTMLInputElement>(
                 '.message-input input, .welcome-message-field'
             )
             input?.focus()
         })
     }
-})
+}
+window.addEventListener('message', handleHostMessage)
 
 // Setup event listeners and callbacks
 const setupEventListeners = () => {
@@ -1543,6 +1590,7 @@ const handleStartNewConversation = async () => {
 
 onMounted(async () => {
     await initializeWidget()
+    if (isDisposed) return
     setupEventListeners()
 
     // Setup DOM observer to detect changes
@@ -1572,11 +1620,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-    window.removeEventListener('message', (event) => {
-        if (event.data.type === 'SCROLL_TO_BOTTOM') {
-            scrollToBottom()
-        }
-    })
+    isDisposed = true
+    window.removeEventListener('message', handleHostMessage)
 
     // Remove header menu click listener
     document.removeEventListener('click', closeHeaderMenu)
@@ -1593,6 +1638,7 @@ onUnmounted(() => {
         setupDOMObserver.timeoutId = null
     }
     cancelPendingListenerSetups()
+    cancelPendingWidgetIdPolls()
 
     // Clean up native event listeners
     cleanupNativeEventListeners()

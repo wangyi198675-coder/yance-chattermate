@@ -23,6 +23,10 @@ import WidgetAppList from '@/components/widget-app/WidgetAppList.vue'
   <DashboardLayout>
     <div class="dashboard-container">
       <div class="settings-section">
+        <header class="native-page-intro">
+          <h1>网页组件管理</h1>
+          <p>查看已创建的组件应用，管理配置与密钥。权限及可用状态由真实服务决定。</p>
+        </header>
         <WidgetAppList />
       </div>
     </div>
@@ -40,4 +44,6 @@ import WidgetAppList from '@/components/widget-app/WidgetAppList.vue'
   flex: 1;
   padding: var(--space-lg);
 }
+.native-page-intro h1 { margin: 0; font-size: 19px; color: var(--text); }
+.native-page-intro p { margin: 5px 0 14px; color: var(--muted); font-size: 12px; }
 </style>

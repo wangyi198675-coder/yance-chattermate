@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import YanceWebShell from './components/YanceWebShell.vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DashboardLayout from '@/layouts/DashboardLayout.vue'
@@ -189,6 +190,7 @@ watch(customerId, () => {
 
 <template>
   <DashboardLayout>
+    <YanceWebShell>
     <main class="relationship-world" data-yance-relationship-world>
       <header class="world-topbar">
         <div class="brand-block">
@@ -368,6 +370,7 @@ watch(customerId, () => {
         </div>
       </template>
     </main>
+      </YanceWebShell>
   </DashboardLayout>
 </template>
 

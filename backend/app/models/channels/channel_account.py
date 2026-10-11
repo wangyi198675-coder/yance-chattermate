@@ -34,7 +34,9 @@ class ChannelType(str, enum.Enum):
     """
     WEB = "web"
     TELEGRAM = "telegram"
+    TELEGRAM_USER = "telegram_user"  # personal MTProto, never Telegram Bot
     WHATSAPP = "whatsapp"
+    WHATSAPP_USER = "whatsapp_user"  # personal linked device, never Cloud API
     MESSENGER = "messenger"
     INSTAGRAM = "instagram"
     SLACK = "slack"

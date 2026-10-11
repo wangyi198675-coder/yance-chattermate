@@ -94,7 +94,7 @@ async def test_contact_stores_phone(db, account, conversation, use_test_db, fake
 
 
 @pytest.mark.asyncio
-async def test_typing_shown_no_rating_prompt_on_end_chat(db, account, conversation, use_test_db,
+async def test_receive_only_telegram_never_types_or_prompts_for_rating_on_end_chat(db, account, conversation, use_test_db,
                                                          fake_adapter, test_ai_config):
     """Typing indicator fires, but rating is NEVER asked on a channel — rating
     is a web-widget-only feature."""
@@ -108,11 +108,13 @@ async def test_typing_shown_no_rating_prompt_on_end_chat(db, account, conversati
 
     inbound = InboundMessage(external_account_id="", external_conversation_id="555",
                              external_user_id="555", external_message_id="m3", text="bye")
-    with patch.object(channel_chat.ChatAgent, "create_async", AsyncMock(return_value=fake)), \
-         patch.object(channel_chat, "deliver_to_customer", AsyncMock()):
+    with patch.object(channel_chat.ChatAgent, "create_async", AsyncMock(return_value=fake)) as create_agent, \
+         patch.object(channel_chat, "deliver_to_customer", AsyncMock()) as deliver:
         await process_channel_message(account.id, inbound)
 
-    fake_adapter.send_typing.assert_awaited()
+    create_agent.assert_not_awaited()
+    deliver.assert_not_awaited()
+    fake_adapter.send_typing.assert_not_awaited()
     # No rating was recorded and the adapter was never asked to prompt for one
     assert RatingRepository(db).get_rating_by_session(conversation.session_id) is None
     assert not hasattr(fake_adapter, "send_rating_prompt") or \
@@ -120,7 +122,7 @@ async def test_typing_shown_no_rating_prompt_on_end_chat(db, account, conversati
 
 
 @pytest.mark.asyncio
-async def test_request_contact_triggers_phone_prompt(db, account, conversation, use_test_db,
+async def test_receive_only_telegram_never_requests_phone_prompt(db, account, conversation, use_test_db,
                                                     fake_adapter, test_ai_config):
     AgentChannelConfigRepository(db).set_agent(account.id, conversation.agent_id)
     response = SimpleNamespace(message="Let me connect you.", transfer_to_human=False,
@@ -132,8 +134,11 @@ async def test_request_contact_triggers_phone_prompt(db, account, conversation, 
 
     inbound = InboundMessage(external_account_id="", external_conversation_id="555",
                              external_user_id="555", external_message_id="m4", text="help")
-    with patch.object(channel_chat.ChatAgent, "create_async", AsyncMock(return_value=fake)), \
-         patch.object(channel_chat, "deliver_to_customer", AsyncMock()):
+    with patch.object(channel_chat.ChatAgent, "create_async", AsyncMock(return_value=fake)) as create_agent, \
+         patch.object(channel_chat, "deliver_to_customer", AsyncMock()) as deliver:
         await process_channel_message(account.id, inbound)
 
-    fake_adapter.request_phone.assert_awaited()
+    create_agent.assert_not_awaited()
+    deliver.assert_not_awaited()
+    fake_adapter.request_phone.assert_not_awaited()
+    fake_adapter.send_typing.assert_not_awaited()

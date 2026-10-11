@@ -21,6 +21,16 @@ import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard.vue'
 
 <template>
   <DashboardLayout>
+    <header class="native-page-intro">
+      <h1>数据分析</h1>
+      <p>按时间范围查看会话、智能体表现与客户反馈；数据以实际服务返回为准。</p>
+    </header>
     <AnalyticsDashboard />
   </DashboardLayout>
 </template>
+
+<style scoped>
+.native-page-intro { padding: 14px 22px 0; }
+.native-page-intro h1 { margin: 0; color: var(--text); font-size: 19px; }
+.native-page-intro p { margin: 5px 0 12px; color: var(--muted); font-size: 12px; }
+</style>

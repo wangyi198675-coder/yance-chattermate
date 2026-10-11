@@ -33,15 +33,14 @@ const liveUrl = computed(() => workspaceRef.value?.settings?.live_url || null)
     <div class="faq-view">
       <div class="page-header">
         <div>
-          <h1 class="page-header__title">Help center</h1>
+          <h1 class="page-header__title">帮助中心</h1>
           <p class="page-header__subtitle">
-            Turn your knowledge base into a public help center. Generate FAQs automatically, review
-            them, then publish.
+            将知识库整理为可公开访问的帮助中心。自动生成常见问题，人工检查后再发布。
           </p>
         </div>
         <a v-if="liveUrl" class="page-header__link" :href="liveUrl" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6" /><path d="M10 14 21 3" /></svg>
-          View public help center
+          查看公开帮助中心
         </a>
       </div>
 
@@ -52,12 +51,14 @@ const liveUrl = computed(() => workspaceRef.value?.settings?.live_url || null)
           :organization-id="organizationId"
           @plan-allowed="planAllowed = $event"
         />
+        <p v-else class="org-warning" role="status">当前组织信息不可用，暂时无法加载帮助中心。</p>
       </FaqProLockOverlay>
     </div>
   </DashboardLayout>
 </template>
 
 <style scoped>
+.org-warning { color: var(--muted); padding: 16px; border: 1px solid var(--o10); border-radius: 10px; }
 .faq-view {
   max-width: 1000px;
   margin: 0 auto;

@@ -239,7 +239,8 @@ async def test_send_fcm_notification_message_structure(mock_db, user_id, sample_
                 'type': sample_notification.type,
                 'notification_id': str(sample_notification.id),
                 'session_id': 'abc-123',
-                'metadata': json.dumps({"session_id": "abc-123"})
+                'metadata': json.dumps({"session_id": "abc-123"}),
+                'sound_enabled': 'true'
             },
             token="token_a",
             webpush=mock_messaging.WebpushConfig.return_value,

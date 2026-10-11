@@ -78,7 +78,9 @@ class TestSanitizedHttpExceptions:
         with caplog.at_level("ERROR"):
             client.get("/boom")
 
-        assert LEAKED in caplog.text, "the original detail must survive in the log"
+        assert 'relation "users" does not exist' in caplog.text
+        assert "postgresql://10.0.0.4/app" in caplog.text
+        assert "hunter2" not in caplog.text, "credentials must not leak into logs"
         assert "/boom" in caplog.text, "the log must say which route produced it"
 
     def test_4xx_detail_is_written_for_the_caller_and_kept(self, client):

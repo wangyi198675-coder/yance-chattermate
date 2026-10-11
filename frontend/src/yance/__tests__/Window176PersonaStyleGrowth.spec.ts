@@ -10,7 +10,7 @@ describe('Window176 Persona Seed / Style Corpus / Growth structural gate', () =>
     expect(host).toContain('data-owner-state="ready"')
     expect(host).toContain('@click="openPersonaStudio(chat)"')
     expect(host).toContain('YancePersonaStudio')
-    expect(host).toContain('persona-turn-override')
+    expect(host).toContain('requestTurnIntent(identity, payload.instructions')
   })
 
   it('separates identity facts, style traits and relationship-scoped rules', () => {
@@ -60,8 +60,9 @@ describe('Window176 Persona Seed / Style Corpus / Growth structural gate', () =>
   it('upgrades the existing Settings Persona entry instead of creating a second management surface', () => {
     const settings = read('../YanceSettingsNativeComposition.vue')
     expect(settings).toContain("{ id: 'persona', label: '人格与学习'")
-    expect(settings).toContain("persona: 'Connected'")
-    expect(settings).toContain('data-settings-runtime-state="persona-ready"')
+    expect(settings).toContain("persona: 'Verification pending'")
+    expect(settings).toContain('data-settings-runtime-state="persona-unverified"')
+    expect(settings).not.toContain('data-settings-runtime-state="persona-ready"')
     expect(settings).toContain('data-native-owner="YancePersonaStudio"')
     expect(settings).toContain('to="/yance"')
     expect(settings).not.toContain('data-settings-runtime-state="persona-unavailable"')

@@ -64,8 +64,8 @@ describe('Window 23 Frozen Settings native composition structural gate', () => {
     const settings = read('../YanceSettingsNativeComposition.vue')
     expect(settings).toContain('translationService.health()')
     expect(settings).toContain('data-native-owner="backend /health"')
-    expect(settings).toContain('data-settings-runtime-state="memory-unavailable"')
-    expect(settings).toContain('data-settings-runtime-state="voice-media-unavailable"')
+    expect(settings).toContain('data-settings-runtime-state="memory-readonly"')
+    expect(settings).toContain('data-settings-runtime-state="voice-media-runtime-unverified"')
     expect(settings).not.toMatch(/memoryService|voiceService|mediaService|backupService|updateService/)
   })
 

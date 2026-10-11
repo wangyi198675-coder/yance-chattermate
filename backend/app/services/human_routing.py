@@ -39,6 +39,8 @@ RECEIVE_ONLY_SOCIAL_CHANNELS = frozenset({
     'whatsapp',
     'instagram',
     'telegram',
+    'telegram_user',
+    'whatsapp_user',
 })
 
 # Sent when a chat is queued for the team but nobody has picked it up yet. The

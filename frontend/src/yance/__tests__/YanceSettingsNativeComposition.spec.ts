@@ -96,6 +96,7 @@ vi.mock('@/layouts/DashboardLayout.vue', () => ({
 }))
 
 vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: vi.fn(), currentRoute: { value: { path: '/yance/settings' } } }),
   RouterLink: {
     props: ['to'],
     template: '<a class="router-link-stub" :data-to="to"><slot /></a>',
@@ -114,7 +115,8 @@ describe('YanceSettingsNativeComposition', () => {
     ).toBe('accounts')
     expect(wrapper.text()).toContain('消息平台')
     expect(wrapper.text()).toContain('Primary WhatsApp')
-    expect(wrapper.text()).toContain('已连接')
+    // An active account without verified provider health is not Connected.
+    expect(wrapper.get('.pane-heading .truth-state').attributes('data-settings-product-state')).toBe('Needs attention')
     expect(wrapper.text()).toContain('需要检查')
     expect(wrapper.text()).toContain('尚未配置')
     expect(wrapper.find('[data-to="/yance/platform-accounts"]').exists()).toBe(true)
@@ -126,7 +128,7 @@ describe('YanceSettingsNativeComposition', () => {
     await flushPromises()
     await wrapper.get('[data-settings-section="translation"]').trigger('click')
 
-    expect(wrapper.get('[data-settings-runtime-state="not_configured"]').exists()).toBe(true)
+    expect(wrapper.find('[data-settings-runtime-state="not_configured"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('DeepL')
     expect(wrapper.text()).toContain('尚未配置')
     expect(wrapper.find('[data-active-settings-section="translation"] input').exists()).toBe(false)
@@ -144,7 +146,8 @@ describe('YanceSettingsNativeComposition', () => {
     await systemButton!.trigger('click')
     expect(setTheme).toHaveBeenCalledWith('system')
     expect(wrapper.text()).toContain('桌面通知')
-    expect(wrapper.text()).toContain('已连接')
+    // Local notification preferences are Available, not proof of push delivery.
+    expect(wrapper.get('.pane-heading .truth-state').attributes('data-settings-product-state')).toBe('Available')
     expect(wrapper.find('[data-to="/yance/manage/user"]').exists()).toBe(true)
   })
 
@@ -156,7 +159,7 @@ describe('YanceSettingsNativeComposition', () => {
     expect(wrapper.text()).toContain('时区')
     expect(wrapper.text()).toContain('营业时间')
   })
-  it('keeps all five canonical status values in data attributes while rendering only Chinese labels', async () => {
+  it('keeps verified, available and pending statuses separate in Chinese', async () => {
     listAccounts.mockResolvedValueOnce([])
     const wrapper = mount(YanceSettingsNativeComposition)
     await flushPromises()
@@ -166,16 +169,17 @@ describe('YanceSettingsNativeComposition', () => {
     expect(status().text()).toBe('尚未配置')
 
     await wrapper.get('[data-settings-section="ai"]').trigger('click')
-    expect(status().attributes('data-settings-product-state')).toBe('Connected')
-    expect(status().text()).toBe('已连接')
-    await wrapper.get('[data-settings-section="persona"]').trigger('click')
     expect(status().attributes('data-settings-product-state')).toBe('Needs attention')
     expect(status().text()).toBe('需要检查')
+    expect(wrapper.get('[data-yance-ai-config-state="stored-not-inference-ready"]').text()).toContain('推理尚未验证')
+    await wrapper.get('[data-settings-section="persona"]').trigger('click')
+    expect(status().attributes('data-settings-product-state')).toBe('Verification pending')
+    expect(status().text()).toBe('待验证')
     await wrapper.get('[data-settings-section="memory"]').trigger('click')
-    expect(status().attributes('data-settings-product-state')).toBe('Unavailable')
-    expect(status().text()).toBe('暂不可用')
+    expect(status().attributes('data-settings-product-state')).toBe('Available')
+    expect(status().text()).toBe('已有功能')
     await wrapper.get('[data-settings-section="translation"]').trigger('click')
-    expect(wrapper.get('[data-settings-runtime-state="not_configured"]').exists()).toBe(true)
+    expect(wrapper.find('[data-settings-runtime-state="not_configured"]').exists()).toBe(true)
     expect(wrapper.get('.state-badge').text()).toBe('尚未配置')
     wrapper.unmount()
   })

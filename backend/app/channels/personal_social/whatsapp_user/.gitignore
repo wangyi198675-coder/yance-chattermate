@@ -1,0 +1,5 @@
+node_modules/
+*.auth.enc
+*.dpapi
+*.session.lock
+*.tmp

@@ -32,22 +32,21 @@ defineEmits<{
 <template>
   <div class="empty-state">
     <FaqOrb class="empty-state__orb" :size="64" />
-    <h3 class="empty-state__title">No FAQs yet</h3>
+    <h3 class="empty-state__title">暂无常见问题</h3>
     <p class="empty-state__copy">
-      Let ChatterMate read your knowledge base and draft clear, ready-to-publish FAQs — grouped by
-      topic and kept in sync as your docs change.
+      可以使用 ChatterMate 根据现有知识库生成按主题整理的常见问题草稿，并在知识内容更新时同步调整。
     </p>
     <div class="empty-state__pill">
       <span class="empty-state__dot"></span>
-      Reading from {{ sourceCount }} sources · {{ pageCount }} pages
+      读取 {{ sourceCount }} 个来源 · {{ pageCount }} 个页面
     </div>
     <div class="empty-state__actions">
       <button class="btn btn--primary" type="button" @click="$emit('generate')">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" /></svg>
-        Generate from knowledge base
+        从知识库生成
       </button>
-      <button class="btn btn--ghost" type="button" @click="$emit('import')">Import existing FAQ</button>
-      <button class="btn btn--text" type="button" @click="$emit('add')">Add manually</button>
+      <button class="btn btn--ghost" type="button" @click="$emit('import')">导入已有常见问题</button>
+      <button class="btn btn--text" type="button" @click="$emit('add')">手动添加</button>
     </div>
   </div>
 </template>

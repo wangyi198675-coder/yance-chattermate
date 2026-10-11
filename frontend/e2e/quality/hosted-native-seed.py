@@ -18,6 +18,7 @@ from app.models.role import Role
 from app.models.permission import Permission
 from app.models.session_to_agent import SessionToAgent, SessionStatus
 from app.models.chat_history import ChatHistory
+from app.models.agent import Agent, AgentType
 
 def require():
     if not (os.environ.get("GITHUB_ACTIONS") == "true"
@@ -40,34 +41,80 @@ if mode == "seed":
         role = Role(name="Admin", organization_id=org_id)
         db.add(role)
         db.flush()
-        permission = db.query(Permission).filter(Permission.name == "super_admin").first()
-        if permission is not None:
-            role.permissions.append(permission)
-        user = User(id=user_id, email="qa-" + unique + "@example.invalid",
+        # Fresh Alembic databases have no Permission rows yet. Mirror the
+        # canonical first-organization permission catalog rather than creating
+        # an "Admin" name with zero actual RBAC grants (all native APIs 403).
+        catalog = {}
+        for permission_name, description in Permission.default_permissions():
+            permission = db.query(Permission).filter(
+                Permission.name == permission_name
+            ).first()
+            if permission is None:
+                permission = Permission(name=permission_name, description=description)
+                db.add(permission)
+                db.flush()
+            catalog[permission_name] = permission
+        if "super_admin" not in catalog or "manage_organization" not in catalog:
+            raise RuntimeError("HOSTED_QA_NATIVE_PERMISSION_CATALOG_INCOMPLETE")
+        role.permissions = list(catalog.values())
+        user = User(id=user_id, email="qa-" + unique + "@example.com",
                     full_name="Synthetic Native QA User", organization_id=org_id, role_id=role.id,
                     is_active=True, hashed_password=User.get_password_hash(os.environ["YANCE_QA_SYNTHETIC_PASSWORD"]))
-        customer = Customer(id=customer_id, email="customer-" + unique + "@example.invalid",
+        customer = Customer(id=customer_id, email="customer-" + unique + "@example.com",
                             full_name="Synthetic QA Customer", organization_id=org_id,
                             meta_data={"person_profile":{"city":"Berlin"}})
-        db.add_all([user, customer])
+        # Native ChatRepository.get_recent_chats and get_chat_detail both
+        # JOIN ChatHistory.agent_id -> Agent.id. Without this owner, the browser
+        # shows "no conversations" even when ChatHistory rows exist.
+        agent = Agent(name="W447 isolated QA agent", display_name="Isolated QA",
+                      agent_type=AgentType.GENERAL, instructions=[],
+                      organization_id=org_id, is_active=True,
+                      ai_replies_enabled=False, is_default=True)
+        db.add_all([user, customer, agent])
         db.flush()
-        db.add(SessionToAgent(session_id=session_id, user_id=user_id, customer_id=customer_id,
-                              organization_id=org_id, status=SessionStatus.OPEN, channel="web"))
+        db.add(SessionToAgent(session_id=session_id, user_id=user_id, agent_id=agent.id,
+                              customer_id=customer_id, organization_id=org_id,
+                              status=SessionStatus.OPEN, channel="web"))
         db.flush()
-        message = ChatHistory(organization_id=org_id, customer_id=customer_id, user_id=user_id,
+        message = ChatHistory(organization_id=org_id, customer_id=customer_id,
+                              user_id=user_id, agent_id=agent.id,
                               session_id=session_id, message="Synthetic QA history, local only",
                               message_type="user", attributes={})
         db.add(message)
+        db.flush()
+        # Two distinct canonical customers are required for real switch-contact
+        # coverage; do not fake two rows by duplicating one customer's metadata.
+        second_customer = Customer(
+            id=uuid.uuid4(), email="qa-secondary-"+unique+"@example.com",
+            full_name="Synthetic QA Second Customer", organization_id=org_id,
+            meta_data={"person_profile":{"city":"Hamburg"}})
+        second_session = uuid.uuid4()
+        db.add(second_customer)
+        db.flush()
+        db.add(SessionToAgent(session_id=second_session, user_id=user_id,
+                              agent_id=agent.id, customer_id=second_customer.id,
+                              organization_id=org_id, status=SessionStatus.OPEN,
+                              channel="web"))
+        db.flush()
+        second_message = ChatHistory(
+            organization_id=org_id, customer_id=second_customer.id,
+            user_id=user_id, agent_id=agent.id,
+            session_id=second_session, message="Independent second QA history",
+            message_type="user", attributes={})
+        db.add(second_message)
         db.commit()
         db.refresh(message)
         fixture = {"org":str(org_id),"user":str(user_id),"customer":str(customer_id),
                    "session":str(session_id),"message":str(message.id),
-                   "email":user.email}
+                   "second_customer":str(second_customer.id),
+                   "second_session":str(second_session),
+                   "second_message":str(second_message.id),
+                   "agent":str(agent.id),"email":user.email}
     path.write_text(json.dumps(fixture,indent=2),encoding="utf8")
     if os.environ.get("GITHUB_ENV"):
         with open(os.environ["GITHUB_ENV"],"a",encoding="utf8") as env:
             for k,v in fixture.items():
-                if k in ("email",): continue
+                if k not in ("org", "user", "customer", "session", "message"): continue
                 env.write("YANCE_QA_" + {"org":"ORG_ID","user":"USER_ID","customer":"CUSTOMER_ID",
                            "session":"SESSION_ID","message":"MESSAGE_ID"}[k] + "=" + v + "\n")
             env.write("YANCE_QA_AUTH_USER=" + fixture["email"] + "\n")

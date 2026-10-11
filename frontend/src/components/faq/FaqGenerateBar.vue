@@ -36,27 +36,27 @@ defineEmits<{
 }>()
 
 const title = computed(() => {
-  if (props.phase === 'generating') return 'Generating FAQs…'
-  if (props.phase === 'ready') return 'FAQs ready to publish'
-  return 'Generate FAQs'
+  if (props.phase === 'generating') return '正在生成常见问题…'
+  if (props.phase === 'ready') return '常见问题已准备好发布'
+  return '生成常见问题'
 })
 
 const subtitle = computed(() =>
   props.phase === 'ready'
-    ? `${props.faqCount} FAQs · ${props.publishedCount} published`
-    : `Reading from ${props.sourceCount} sources · ${props.pageCount} pages`,
+    ? `共 ${props.faqCount} 条常见问题 · 已发布 ${props.publishedCount} 条`
+    : `读取 ${props.sourceCount} 个来源 · ${props.pageCount} 个页面`,
 )
 
 const generateLabel = computed(() => {
-  if (props.phase === 'generating') return 'Generating…'
+  if (props.phase === 'generating') return '正在生成…'
   if (props.phase === 'ready') {
     // Regenerate only reads new (ungenerated) sources — say so.
     if (typeof props.newSourceCount === 'number' && props.newSourceCount > 0) {
-      return `Generate ${props.newSourceCount} new source${props.newSourceCount === 1 ? '' : 's'}`
+      return `从 ${props.newSourceCount} 个新增来源生成`
     }
-    return 'Regenerate'
+    return '重新生成'
   }
-  return 'Generate'
+  return '生成'
 })
 
 const noNewSources = computed(() => props.phase === 'ready' && props.newSourceCount === 0)
@@ -64,7 +64,7 @@ const noNewSources = computed(() => props.phase === 'ready' && props.newSourceCo
 const generateDisabled = computed(() => props.phase === 'generating' || props.disabled || noNewSources.value)
 
 const generateTitle = computed(() =>
-  noNewSources.value ? 'All knowledge sources already have FAQs' : undefined,
+  noNewSources.value ? '所有知识来源均已生成常见问题' : undefined,
 )
 </script>
 
@@ -83,11 +83,11 @@ const generateTitle = computed(() =>
     <div class="generate-bar__actions">
       <button class="btn btn--ghost" type="button" @click="$emit('import')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12" /><path d="M8 11l4 4 4-4" /><path d="M5 21h14" /></svg>
-        Import
+        导入
       </button>
       <button class="btn btn--ghost" type="button" @click="$emit('add')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
-        Add FAQ
+        添加常见问题
       </button>
       <button class="btn btn--generate" type="button" :disabled="generateDisabled" :title="generateTitle" @click="$emit('generate')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" /></svg>

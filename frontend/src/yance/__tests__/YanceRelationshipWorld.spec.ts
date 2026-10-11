@@ -26,6 +26,10 @@ vi.mock('@/services/people', () => ({
   },
 }))
 
+vi.mock('@/services/channels', () => ({
+  default: { listAccounts: vi.fn().mockResolvedValue([]) },
+}))
+
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: routeParams }),
   useRouter: () => ({ push }),
@@ -194,7 +198,7 @@ describe('YanceRelationshipWorld', () => {
     expect(getRelationshipContext).toHaveBeenCalledWith('customer-1')
     const memory = wrapper.get('[data-relationship-memory]')
     const insight = wrapper.get('[data-relationship-derived-insight]')
-    const runtime = wrapper.get('[data-relationship-runtime-state="ready"]')
+    const runtime = wrapper.find('[data-relationship-runtime-state="ready"]')
 
     expect(memory.text()).toContain('Prefers concise messages')
     expect(memory.text()).toContain('chat_history:42')

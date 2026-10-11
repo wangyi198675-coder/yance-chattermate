@@ -1,4 +1,6 @@
 mod dpapi;
+// Native-only current-user OAuth vault. No Tauri command or JS secret bridge.
+mod siwc_secure_store;
 mod pg_password_pipe;
 mod private_runtime;
 

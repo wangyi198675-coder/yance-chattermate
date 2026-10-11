@@ -170,10 +170,10 @@ const confirmBusy = ref(false)
 
 function askDelete(faq: FaqItem) {
   confirmState.value = {
-    title: 'Delete FAQ',
-    message: `Delete “${faq.question}”? This cannot be undone.`,
-    actionLabel: 'Delete',
-    busyLabel: 'Deleting…',
+    title: '删除常见问题',
+    message: `确定删除“${faq.question}”吗？此操作无法撤销。`,
+    actionLabel: '删除',
+    busyLabel: '正在删除…',
     intent: 'danger',
     action: () => deleteFaq(faq),
   }
@@ -188,7 +188,7 @@ async function askGenerate() {
     return
   }
   if (e.total_sources === 0) {
-    toast.error('No knowledge sources to generate from. Add knowledge first.')
+    toast.error('没有可用于生成常见问题的知识来源，请先添加知识。')
     return
   }
   // Multiple sources → let the user pick which to generate from.
@@ -197,24 +197,24 @@ async function askGenerate() {
     return
   }
   if (e.new_sources === 0) {
-    toast.info('All knowledge sources already have FAQs — nothing new to generate.')
+    toast.info('所有知识来源均已生成常见问题，目前没有新增内容。')
     return
   }
-  const sources = `${e.new_sources} new source${e.new_sources === 1 ? '' : 's'}`
-  const pages = e.pages ? ` (~${e.pages} page${e.pages === 1 ? '' : 's'})` : ''
-  let message = `Generate FAQs from ${sources}${pages}?`
+  const sources = `${e.new_sources} 个新增来源`
+  const pages = e.pages ? `（约 ${e.pages} 页）` : ''
+  let message = `确定根据 ${sources}${pages} 生成常见问题吗？`
   let disabledReason: string | undefined
   if (e.metered) {
-    message += ` This will use about ${e.estimated_calls} message credit${e.estimated_calls === 1 ? '' : 's'}.`
+    message += ` 预计消耗约 ${e.estimated_calls} 次消息额度。`
     if (e.remaining_credits !== null && e.estimated_calls > e.remaining_credits) {
-      disabledReason = `Only ${e.remaining_credits} credits left this period — upgrade your plan or switch to your own AI model.`
+      disabledReason = `本周期仅剩 ${e.remaining_credits} 次额度，请升级套餐或改用自有 AI 模型。`
     }
   }
   confirmState.value = {
-    title: 'Generate FAQs',
+    title: '生成常见问题',
     message,
-    actionLabel: 'Generate',
-    busyLabel: 'Starting…',
+    actionLabel: '生成',
+    busyLabel: '正在启动…',
     intent: 'primary',
     disabledReason,
     action: async () => {
@@ -226,10 +226,10 @@ async function askGenerate() {
 function askBulkDelete() {
   const n = selectedIds.value.size
   confirmState.value = {
-    title: `Delete ${n} FAQ${n === 1 ? '' : 's'}`,
-    message: 'Published articles will disappear from your help center. This cannot be undone.',
-    actionLabel: 'Delete',
-    busyLabel: 'Deleting…',
+    title: `删除 ${n} 条常见问题`,
+    message: '已发布的文章将从帮助中心移除，且无法撤销。',
+    actionLabel: '删除',
+    busyLabel: '正在删除…',
     intent: 'danger',
     action: async () => {
       try {
@@ -250,9 +250,9 @@ function publishedInCategory(items: FaqItem[]): number {
 }
 
 const STATUS_FILTERS: { v: 'all' | FaqStatus; l: string }[] = [
-  { v: 'all', l: 'All' },
-  { v: 'published', l: 'Published' },
-  { v: 'draft', l: 'Draft' },
+  { v: 'all', l: '全部' },
+  { v: 'published', l: '已发布' },
+  { v: 'draft', l: '草稿' },
 ]
 
 async function runConfirm() {
@@ -276,7 +276,7 @@ const newFaqStub = computed<FaqItem>(() => ({
   category: 'General',
   status: 'draft',
   knowledge_id: null,
-  source_label: 'Added manually',
+  source_label: '手动添加',
 }))
 
 onMounted(() => {
@@ -289,16 +289,16 @@ onUnmounted(stopPolling)
 
 <template>
   <div class="faq-workspace">
-    <div v-if="phase === 'loading'" class="loading">Loading your FAQs…</div>
+    <div v-if="phase === 'loading'" class="loading">正在加载常见问题…</div>
 
     <template v-else>
       <nav class="tabs" role="tablist">
         <button class="tab" :class="{ 'tab--active': tab === 'faqs' }" type="button" role="tab" :aria-selected="tab === 'faqs'" @click="tab = 'faqs'">
-          FAQs
+          常见问题
           <span v-if="faqs.length" class="tab__count">{{ faqs.length }}</span>
         </button>
         <button class="tab" :class="{ 'tab--active': tab === 'settings' }" type="button" role="tab" :aria-selected="tab === 'settings'" @click="tab = 'settings'">
-          Customization
+          外观与设置
         </button>
       </nav>
 
@@ -352,13 +352,13 @@ onUnmounted(stopPolling)
             <div class="faq-toolbar">
               <div class="faq-search">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-                <input v-model="searchQuery" type="search" placeholder="Search questions & answers…" aria-label="Search FAQs" />
+                <input v-model="searchQuery" type="search" placeholder="搜索问题和答案…" aria-label="搜索常见问题" />
               </div>
-              <select v-model="categoryFilter" class="faq-select" aria-label="Filter by category">
-                <option :value="null">All topics</option>
+              <select v-model="categoryFilter" class="faq-select" aria-label="按主题筛选">
+                <option :value="null">全部主题</option>
                 <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
               </select>
-              <div class="faq-status-filter" role="group" aria-label="Filter by status">
+              <div class="faq-status-filter" role="group" aria-label="按状态筛选">
                 <button
                   v-for="opt in STATUS_FILTERS"
                   :key="opt.v"
@@ -370,12 +370,12 @@ onUnmounted(stopPolling)
               </div>
             </div>
 
-            <div v-if="hasActiveFilters" class="faq-resultcount">{{ filteredCount }} of {{ faqs.length }} shown</div>
+            <div v-if="hasActiveFilters" class="faq-resultcount">显示 {{ filteredCount }} / {{ faqs.length }} 条</div>
           </template>
 
           <div v-if="faqs.length && groupedFaqs.size === 0" class="faq-noresults">
-            <p>No FAQs match your filters.</p>
-            <button v-if="hasActiveFilters" class="faq-noresults__clear" type="button" @click="resetFilters">Clear filters</button>
+            <p>没有符合当前筛选条件的常见问题。</p>
+            <button v-if="hasActiveFilters" class="faq-noresults__clear" type="button" @click="resetFilters">清除筛选</button>
           </div>
 
           <div v-else-if="groupedFaqs.size" class="faq-list">
@@ -449,7 +449,7 @@ onUnmounted(stopPolling)
             @remove-domain="removeDomain"
           />
         </template>
-        <div v-else class="loading">Loading settings…</div>
+        <div v-else class="loading">正在加载设置…</div>
       </div>
     </template>
 
@@ -463,12 +463,12 @@ onUnmounted(stopPolling)
       @generate="onPickSources"
     />
 
-    <div v-if="selectionActive" class="bulkbar" role="toolbar" aria-label="Bulk actions">
-      <span class="bulkbar__count">{{ selectedIds.size }} selected</span>
-      <button class="bulkbar__btn" type="button" @click="bulkSetStatus('published')">Publish</button>
-      <button class="bulkbar__btn" type="button" @click="bulkSetStatus('draft')">Unpublish</button>
-      <button class="bulkbar__btn bulkbar__btn--danger" type="button" @click="askBulkDelete">Delete</button>
-      <button class="bulkbar__clear" type="button" aria-label="Clear selection" @click="clearSelection">✕</button>
+    <div v-if="selectionActive" class="bulkbar" role="toolbar" aria-label="批量操作">
+      <span class="bulkbar__count">已选择 {{ selectedIds.size }} 条</span>
+      <button class="bulkbar__btn" type="button" @click="bulkSetStatus('published')">发布</button>
+      <button class="bulkbar__btn" type="button" @click="bulkSetStatus('draft')">取消发布</button>
+      <button class="bulkbar__btn bulkbar__btn--danger" type="button" @click="askBulkDelete">删除</button>
+      <button class="bulkbar__clear" type="button" aria-label="清除选择" @click="clearSelection">✕</button>
     </div>
 
     <div v-if="confirmState" class="confirm" role="dialog" aria-modal="true">
@@ -477,7 +477,7 @@ onUnmounted(stopPolling)
         <p class="confirm__msg">{{ confirmState.message }}</p>
         <p v-if="confirmState.disabledReason" class="confirm__blocked">{{ confirmState.disabledReason }}</p>
         <div class="confirm__actions">
-          <button class="confirm__cancel" type="button" :disabled="confirmBusy" @click="confirmState = null">Cancel</button>
+          <button class="confirm__cancel" type="button" :disabled="confirmBusy" @click="confirmState = null">取消</button>
           <button
             class="confirm__go"
             :class="confirmState.intent === 'primary' ? 'confirm__go--primary' : 'confirm__go--danger'"

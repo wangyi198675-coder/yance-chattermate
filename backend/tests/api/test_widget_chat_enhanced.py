@@ -279,59 +279,48 @@ class TestHandleWidgetChat:
                 )
     
     @pytest.mark.asyncio
-    async def test_handle_widget_chat_workflow_execution(self, mock_sio, monkeypatch, test_widget, test_customer, test_workflow, test_ai_config, db):
-        """Test widget chat with workflow execution"""
+    async def test_handle_widget_chat_workflow_execution(
+        self, mock_sio, monkeypatch, test_widget, test_customer,
+        test_workflow, test_ai_config, test_session, db,
+    ):
+        """Workflow must fail closed to native receive-and-relay until delivery
+        is idempotent; the actual customer message must still be persisted.
+        """
         from app.api import widget_chat
-        
+        from app.models.chat_history import ChatHistory
+
+        test_session.workflow_id = test_workflow.id
+        db.commit()
         monkeypatch.setattr(widget_chat, "sio", mock_sio)
         monkeypatch.setattr(widget_chat, "get_db", lambda: iter([db]))
-        
-        session_id = uuid4()
-        mock_auth_result = (str(test_widget.id), str(test_widget.organization_id), str(test_customer.id), "token")
         mock_sio.get_session.return_value = {
             "widget_id": str(test_widget.id),
             "org_id": str(test_widget.organization_id),
             "customer_id": str(test_customer.id),
-            "session_id": str(session_id),
+            "session_id": str(test_session.session_id),
             "agent_id": str(test_widget.agent_id),
-            "ai_config": test_ai_config
+            "ai_config": test_ai_config,
         }
-        monkeypatch.setattr(
-            widget_chat,
-            "authenticate_socket_conversation_token",
-            AsyncMock(return_value=mock_auth_result)
+        with patch.object(
+            SessionToAgentRepository, "get_active_customer_session",
+            return_value=test_session,
+        ), patch("app.api.widget_chat.WorkflowChatService") as workflow_service, patch(
+            "app.api.widget_chat.ChatAgent.create_async", new_callable=AsyncMock
+        ) as create_ai:
+            await widget_chat.handle_widget_chat("test_sid", {"message": "Hello"})
+
+        workflow_service.assert_not_called()
+        create_ai.assert_not_awaited()
+        incoming = db.query(ChatHistory).filter(
+            ChatHistory.session_id == test_session.session_id,
+            ChatHistory.message_type == "user",
+        ).all()
+        assert len(incoming) == 1
+        assert incoming[0].message == "Hello"
+        assert not any(
+            call.args and call.args[0] == "chat_response"
+            for call in mock_sio.emit.call_args_list
         )
-        
-        # Mock active session with workflow
-        mock_session = MagicMock()
-        mock_session.session_id = session_id
-        mock_session.workflow_id = test_workflow.id
-        mock_session.user_id = None  # No human agent
-        mock_session.current_node_id = None
-        mock_session.workflow_state = {}
-        
-        # Mock workflow execution result
-        mock_workflow_result = MagicMock()
-        mock_workflow_result.success = True
-        mock_workflow_result.form_data = {}
-        mock_workflow_result.next_node_id = None
-        mock_workflow_result.workflow_state = {}
-        mock_workflow_result.response_messages = ["AI Response"]
-        mock_workflow_result.end_conversation = False
-        mock_workflow_result.transfer_to_human = False
-        
-        with patch.object(SessionToAgentRepository, 'get_active_customer_session', return_value=mock_session):
-            with patch.object(ChatRepository, 'create_message', return_value=MagicMock()):
-                with patch('app.api.widget_chat.WorkflowChatService') as mock_workflow_chat_service:
-                    mock_workflow_chat_service.return_value.handle_workflow_chat = AsyncMock(return_value=mock_workflow_result)
-                    
-                    sid = "test_sid"
-                    data = {"message": "Hello"}
-                    
-                    await widget_chat.handle_widget_chat(sid, data)
-                    
-                    # Verify workflow chat was executed
-                    mock_workflow_chat_service.return_value.handle_workflow_chat.assert_called_once()
 
 
 class TestGetWidgetChatHistory:
@@ -462,6 +451,7 @@ class TestGetWidgetChatHistory:
         
         # Create mock messages
         mock_message1 = MagicMock()
+        mock_message1.id = 1
         mock_message1.message = "Hello"
         mock_message1.message_type = "user"
         mock_message1.created_at = datetime.now(timezone.utc)
@@ -470,6 +460,7 @@ class TestGetWidgetChatHistory:
         mock_message1.agent = None
         
         mock_message2 = MagicMock()
+        mock_message2.id = 2
         mock_message2.message = "Hi there!"
         mock_message2.message_type = "bot"
         mock_message2.created_at = datetime.now(timezone.utc)
@@ -487,6 +478,7 @@ class TestGetWidgetChatHistory:
                     # Verify chat history was emitted with formatted messages
                     expected_messages = [
                         {
+                            'id': 1,
                             'message': 'Hello',
                             'message_type': 'user',
                             'timestamp': '2024-01-01T00:00:00Z',
@@ -496,6 +488,7 @@ class TestGetWidgetChatHistory:
                             'attachments': []
                         },
                         {
+                            'id': 2,
                             'message': 'Hi there!',
                             'message_type': 'bot',
                             'timestamp': '2024-01-01T00:00:00Z',

@@ -13,6 +13,7 @@ import {
 const props = defineProps<{
   chat: ChatDetail
   open: boolean
+  turnIntentFeedback?: string
 }>()
 
 const emit = defineEmits<{
@@ -200,7 +201,7 @@ const selectSeed = async () => {
         seedId: response.seed_id,
         instructions: response.instructions,
       })
-      statusText.value = '仅本轮人格已交给 Reply Brain public seam；未写入数据库。'
+      statusText.value = '本轮人格已提交至当前 Reply Brain；等待应用回执。'
     } else {
       statusText.value = '人格范围已更新：' + response.scope
       await load()
@@ -561,6 +562,7 @@ watch(
 
       <footer>
         <span v-if="statusText" data-yance-persona-status>{{ statusText }}</span>
+        <span v-if="props.turnIntentFeedback" data-yance-persona-turn-receipt>{{ props.turnIntentFeedback }}</span>
         <span v-if="errorCode" data-yance-persona-error>{{ errorCode }}</span>
         <span v-if="projection" class="owner-note">
           {{ projection.effective_scope }} · {{ projection.owner_contract.history }}

@@ -14,7 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { createRouter, createWebHistory } from 'vue-router'
+import { defineComponent, h } from 'vue'
+import { createRouter, createWebHistory, RouterLink } from 'vue-router'
 import type { RouteLocationNormalized, NavigationGuardNext } from 'vue-router'
 import { userService } from '@/services/user'
 import { classifySetupFailure, getSetupStatus, privateBootstrap } from '@/services/organization'
@@ -31,6 +32,61 @@ import { useEnterpriseFeatures } from '@/composables/useEnterpriseFeatures'
 // Initialize enterprise features
 const { hasEnterpriseModule, loadModule, moduleImports, NotAvailableComponent } =
   useEnterpriseFeatures()
+
+// Router-only user-facing states. These do not replace the native Agent workflow
+// editor or change RBAC; the separate /workflow editor route never existed.
+const routeNotice = (
+  name: string,
+  section: string,
+  heading: string,
+  description: string,
+  primaryPath: string,
+  primaryLabel: string,
+) => defineComponent({
+  name,
+  setup: () => () => h('main', {
+    style: {
+      minHeight: '100dvh', boxSizing: 'border-box', padding: 'clamp(24px, 7vw, 70px)',
+      background: 'var(--bg, #141722)', color: 'var(--text, #f5f1eb)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: 'var(--font-sans, sans-serif)',
+    },
+  }, [
+    h('section', {
+      style: {
+        width: '100%', maxWidth: '560px', padding: '28px',
+        background: 'var(--surface, #1c2030)', border: '1px solid var(--o12, #45404d)',
+        borderRadius: '16px', boxSizing: 'border-box',
+      },
+    }, [
+      h('p', { style: { color: 'var(--accent-ink, #cba768)', margin: '0 0 12px' } }, `言策 · ${section}`),
+      h('h1', { style: { fontSize: '24px', lineHeight: '1.3', margin: '0 0 12px' } }, heading),
+      h('p', { style: { fontSize: '14px', lineHeight: '1.7', margin: '0 0 24px', color: 'var(--muted, #c8c2c9)' } }, description),
+      h('nav', { 'aria-label': '言策页面导航', style: { display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' } }, [
+        h(RouterLink, {
+          to: primaryPath,
+          style: { color: 'var(--accent-ink, #e3c28d)', fontWeight: '600', textDecoration: 'underline' },
+        }, { default: () => primaryLabel }),
+        h(RouterLink, {
+          to: '/yance',
+          style: { color: 'var(--text, #f5f1eb)', textDecoration: 'underline' },
+        }, { default: () => '返回言策' }),
+      ]),
+    ]),
+  ]),
+})
+
+const WorkflowRouteEntry = routeNotice(
+  'YanceWorkflowEntry', '原生工作流', '工作流在 AI Agent 中管理',
+  '当前没有独立的工作流编辑页。请进入 AI Agent，选择 Agent 后查看工作流标签。实际编辑能力取决于原生功能资格和账号权限。',
+  '/ai-agents', '前往 AI Agent',
+)
+
+const ForbiddenYanceRoute = routeNotice(
+  'YanceForbidden', '访问权限', '无权访问此页面',
+  '当前账号没有访问这个功能的权限。言策保留 ChatterMate 的原生权限校验，不会自动提升权限。',
+  '/settings/user', '查看我的账号',
+)
 
 // Base routes
 const baseRoutes = [
@@ -56,7 +112,16 @@ const baseRoutes = [
     name: 'setup',
     redirect: '/yance',
     meta: { requiresAuth: false },
-  },  {
+  },
+  {
+    // Workflow is managed on each native AI Agent's Workflow tab. This
+    // entry explains that scope instead of silently falling back to /yance.
+    path: '/workflow',
+    name: 'workflow-entry',
+    component: WorkflowRouteEntry,
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/ai-agents',
     name: 'ai-agents',
     component: () => import('@/views/AIAgentView.vue'),
@@ -252,8 +317,9 @@ const baseRoutes = [
     // silently dropped on a page they had just been refused.
     path: '/403',
     name: 'forbidden',
-    component: () => import('@/views/403.vue'),
-    meta: { requiresAuth: true, layout: 'dashboard' },
+    component: ForbiddenYanceRoute,
+    // The display is Chinese; the existing RBAC guard remains authoritative.
+    meta: { requiresAuth: true },
   },
   {
     path: '/:pathMatch(.*)*',
@@ -354,11 +420,24 @@ const router = createRouter({
   routes: allRoutes,
 })
 
-// /yance is the Windows desktop product. Never expose upstream setup branding in
-// the WebView title; standalone upstream admin pages retain their own titles.
+// Keep browser/WebView titles grounded in the requested product even while
+// native upstream CRUD screens await a separately authorized layout bridge.
+const nativeBrowserTitles: Record<string, string> = {
+  '/workflow': '言策 · 原生工作流',
+  '/403': '言策 · 无权访问',
+  '/ai-agents': '言策 · AI 智能体',
+  '/knowledge': '言策 · 知识库',
+  '/tickets': '言策 · 工单',
+  '/analytics': '言策 · 数据分析',
+  '/faq': '言策 · 帮助中心',
+  '/settings/ai-config': '言策 · AI 模型配置',
+  '/settings/widget-apps': '言策 · 小组件',
+}
 router.afterEach((to) => {
   if (to.path === '/yance' || to.path.startsWith('/yance/')) {
     document.title = '言策'
+  } else if (nativeBrowserTitles[to.path]) {
+    document.title = nativeBrowserTitles[to.path]
   }
 })
 // Add subscription guard only if enterprise module is available
@@ -419,6 +498,12 @@ router.beforeEach(async (to, from, next) => {
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
   if (requiresAuth && !userService.isAuthenticated()) {
     return next('/yance')
+  }
+
+  // /workflow is a native AI Agent entry point, not an unguarded shortcut.
+  // Reuse the same permissions as the actual /ai-agents CRUD destination.
+  if (to.name === 'workflow-entry' && !canAccessMatchedPaths(['/ai-agents'])) {
+    return next({ name: 'forbidden' })
   }
 
   if (!canAccessMatchedPaths(to.matched.map((record) => record.path))) {

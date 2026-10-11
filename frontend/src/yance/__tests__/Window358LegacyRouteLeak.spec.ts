@@ -53,7 +53,7 @@ describe('W358 exact-7efc Yance legacy navigation isolation', () => {
     expect(accounts).toContain('@keydown.esc="closeModal"')
     expect(accounts).toContain('未验证实时收发')
     expect(settings).toContain('provider_health')
-    expect(settings).toContain("persona: 'Needs attention'")
+    expect(settings).toContain("persona: 'Verification pending'")
     expect(advanced).toContain('data-yance-advanced-consent')
     expect(advanced).toContain('AISetup')
     expect(advanced).toContain('UserSettings')

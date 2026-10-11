@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import YanceWebShell from './components/YanceWebShell.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import DashboardLayout from '@/layouts/DashboardLayout.vue'
@@ -27,6 +28,8 @@ type ProductState =
   | 'Not configured'
   | 'Unavailable'
   | 'Loading'
+  | 'Available'
+  | 'Verification pending'
 
 const productStateLabels: Record<ProductState, string> = {
   Connected: '已连接',
@@ -34,6 +37,8 @@ const productStateLabels: Record<ProductState, string> = {
   'Not configured': '尚未配置',
   Unavailable: '暂不可用',
   Loading: '加载中',
+  Available: '已有功能',
+  'Verification pending': '待验证',
 }
 const productStateLabel = (state: ProductState): string => productStateLabels[state]
 
@@ -201,7 +206,8 @@ const accountsState = computed<ProductState>(() => {
 const aiState = computed<ProductState>(() => {
   if (aiLoading.value) return 'Loading'
   if (aiError.value) return 'Needs attention'
-  return hasExistingConfig.value ? 'Connected' : 'Not configured'
+  // A stored AIConfig proves only configuration, not a successful model invocation.
+  return hasExistingConfig.value ? 'Needs attention' : 'Not configured'
 })
 
 const selectedModelCapability = computed(() =>
@@ -210,19 +216,20 @@ const selectedModelCapability = computed(() =>
     ?.models.find((model) => model.value === setupConfig.value.model),
 )
 const fallbackState = computed<ProductState>(() => {
-  if (aiState.value !== 'Connected') return aiState.value
-  return setupConfig.value.fallbackModel ? 'Connected' : 'Not configured'
+  if (aiLoading.value || aiError.value || !hasExistingConfig.value) return aiState.value
+  return setupConfig.value.fallbackModel ? 'Verification pending' : 'Not configured'
 })
 const reasoningState = computed<ProductState>(() => {
-  if (aiState.value !== 'Connected') return aiState.value
+  if (aiLoading.value || aiError.value || !hasExistingConfig.value) return aiState.value
   if (!selectedModelCapability.value?.reasoning_strengths?.length) return 'Unavailable'
-  return setupConfig.value.reasoningStrength ? 'Connected' : 'Not configured'
+  return setupConfig.value.reasoningStrength ? 'Verification pending' : 'Not configured'
 })
 
 const notificationState = computed<ProductState>(() => {
   if (notificationLoading.value) return 'Loading'
   if (notificationError.value) return 'Needs attention'
-  return notificationSettings.value ? 'Connected' : 'Not configured'
+  // Reading preferences proves a local settings feature, not a push-service connection.
+  return notificationSettings.value ? 'Available' : 'Not configured'
 })
 
 const runtimeState = computed<ProductState>(() => {
@@ -242,15 +249,15 @@ const translationState = computed<ProductState>(() => {
 const sectionStatus = computed<Record<SettingsSectionId, ProductState>>(() => ({
   accounts: accountsState.value,
   ai: aiState.value,
-  persona: 'Needs attention',
-  memory: 'Unavailable',
+  persona: 'Verification pending',
+  memory: 'Available',
   translation: translationState.value,
-  'voice-media': 'Unavailable',
-  automation: 'Unavailable',
-  appearance: notificationState.value === 'Needs attention' ? 'Needs attention' : 'Connected',
-  privacy: runtimeState.value === 'Connected' ? 'Needs attention' : runtimeState.value,
+  'voice-media': 'Verification pending',
+  automation: 'Available',
+  appearance: notificationState.value === 'Needs attention' ? 'Needs attention' : 'Available',
+  privacy: 'Verification pending',
   diagnostics:
-    channelsError.value || aiError.value || notificationError.value || runtimeHealthError.value
+    channelsError.value || aiError.value || notificationError.value || runtimeHealthError.value || translationError.value || translationHealth.value?.state === 'needs_attention'
       ? 'Needs attention'
       : runtimeState.value,
 }))
@@ -265,6 +272,7 @@ const selectSection = (id: SettingsSectionId) => {
 
 <template>
   <DashboardLayout>
+    <YanceWebShell>
     <main class="yance-settings" data-yance-settings-native-composition>
       <header class="settings-heading">
         <div>
@@ -338,7 +346,7 @@ const selectSection = (id: SettingsSectionId) => {
                 </div>
                 <p>{{ platform.detail }}</p>
                 <small v-if="platform.active.length > 1">
-                  {{ platform.active.length }} 个已连接账号
+                  {{ platform.active.length }} 个已启用账号（连接健康需分别核验）
                 </small>
                 <small v-if="platform.type === 'line' && platform.accounts.length > platform.active.length">
                   {{ platform.accounts.length - platform.active.length }} 个 LINE 账号需要处理
@@ -357,13 +365,13 @@ const selectSection = (id: SettingsSectionId) => {
             <div class="section-actions" data-native-owner="AIConfigSettings">
               <div>
                 <h3>当前 AI 配置</h3>
-                <p v-if="hasExistingConfig && !aiLoading">
-                  {{ setupConfig.provider || '已配置提供商' }}
+                <p v-if="hasExistingConfig && !aiLoading" data-yance-ai-config-state="stored-not-inference-ready">
+                  已保存模型配置（推理尚未验证）：{{ setupConfig.provider || '已配置提供商' }}
                   <template v-if="setupConfig.model"> · {{ setupConfig.model }}</template>
                 </p>
                 <p v-else-if="aiLoading">正在读取当前配置…</p>
-                <p v-else-if="aiError">当前配置需要检查。</p>
-                <p v-else>尚未配置默认 AI 模型。</p>
+                <p v-else-if="aiError" data-yance-ai-config-state="error">模型配置读取失败，当前不能认定 AI 可用。</p>
+                <p v-else data-yance-ai-config-state="not-configured">尚未配置默认 AI 模型（原生 AIConfig 未找到时包括 HTTP 404）；未执行推理，也没有已连接模型。</p>
               </div>
               <RouterLink class="primary-action" to="/yance/manage/ai">
                 管理 AI 与模型
@@ -384,7 +392,7 @@ const selectSection = (id: SettingsSectionId) => {
                 <span class="state-badge" :class="stateClass(reasoningState)">{{ productStateLabel(reasoningState) }}</span>
               </div>
               <div class="feature-row">
-                <div><strong>任务模型映射</strong><p>当前版本没有独立的任务映射设置。</p></div>
+                <div><strong>任务模型映射</strong><p>尚无任务模型映射编辑入口；请在现有 AI 设置检查默认模型。</p></div>
                 <span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span>
               </div>
               <div class="feature-row" data-native-owner="AIConfig.settings.fallback_model_name">
@@ -395,7 +403,7 @@ const selectSection = (id: SettingsSectionId) => {
           </template>
 
           <template v-else-if="selectedId === 'persona'">
-            <div class="section-actions" data-settings-runtime-state="persona-ready" data-native-owner="YancePersonaStudio">
+            <div class="section-actions" data-settings-runtime-state="persona-unverified" data-native-owner="YancePersonaStudio">
               <div>
                 <h3>人格与学习</h3>
                 <p>基础人格继续由 Agent.instructions 保存；种子、风格素材与审核过的 guideline 复用现有 Knowledge / PgVector，历史与回滚由 SQLAlchemy-Continuum 提供。</p>
@@ -406,38 +414,39 @@ const selectSection = (id: SettingsSectionId) => {
             </div>
             <div class="feature-list">
               <div class="feature-row">
-                <div><strong>全局 / 当前 Persona</strong><p>查看和保存当前基础人格，并使用版本历史回滚。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>全局 / 当前 Persona</strong><p>查看和保存当前基础人格，并使用版本历史回滚。当前对话读写与版本回滚需在真实账号下核验。</p></div>
+                <span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span>
               </div>
               <div class="feature-row">
-                <div><strong>联系人绑定</strong><p>在当前对话的人格工作室中为该联系人选择 Persona。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>联系人绑定</strong><p>在当前对话的人格工作室中为该联系人选择 Persona。当前对话读写与版本回滚需在真实账号下核验。</p></div>
+                <span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span>
               </div>
               <div class="feature-row">
-                <div><strong>会话与本轮覆盖</strong><p>会话 override 写入现有 SessionToAgent；仅本轮 override 不持久化。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>会话与本轮覆盖</strong><p>会话 override 写入现有 SessionToAgent；仅本轮 override 不持久化。当前对话读写与版本回滚需在真实账号下核验。</p></div>
+                <span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span>
               </div>
               <div class="feature-row">
-                <div><strong>Seed / Style Corpus / 比较</strong><p>Character Card 导入、预览、2–3 个 Persona 比较及显式授权的风格素材都使用同一 Persona Studio。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>Seed / Style Corpus / 比较</strong><p>Character Card 导入、预览、2–3 个 Persona 比较及显式授权的风格素材都使用同一 Persona Studio。当前对话读写与版本回滚需在真实账号下核验。</p></div>
+                <span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span>
               </div>
               <div class="feature-row">
-                <div><strong>学习规则与历史</strong><p>审核过的 guideline 进入现有 ChatAgent/Reply Brain；长期学习按已有记录和明确授权持续完善。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>学习规则与历史</strong><p>审核过的 guideline 进入现有 ChatAgent/Reply Brain；长期学习按已有记录和明确授权持续完善。当前对话读写与版本回滚需在真实账号下核验。</p></div>
+                <span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span>
               </div>
             </div>
           </template>
 
           <template v-else-if="selectedId === 'memory'">
-            <div class="notice-card unavailable" data-settings-runtime-state="memory-unavailable">
-              <strong>关系记忆暂不可用</strong>
-              <p>此页不会创建或保存新的关系记忆。已有联系人资料仍以联系人页面中的真实数据为准。</p>
+            <div class="notice-card" data-settings-runtime-state="memory-readonly">
+              <strong>现有关系资料可查看，记忆推理待核验</strong>
+              <p>已接入现有联系人与关系世界只读入口，不新建数据表；图谱推理或自动写入没有运行验收，不能显示已连接。</p>
+              <RouterLink class="secondary-action" to="/yance/relationship">查看关系世界</RouterLink>
             </div>
             <div class="feature-list">
-              <div class="feature-row"><div><strong>已确认</strong><p>已确认的人物资料与事实。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>AI 推测 · 待确认</strong><p>需要人工确认后才能使用的推测。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>关系洞察</strong><p>由真实证据推导的关系变化。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>来源与证据</strong><p>查看信息来自哪里以及何时更新。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
+              <div class="feature-row"><div><strong>已确认</strong><p>现有联系人事实可在关系世界只读查看；当前内容取决于真实联系人数据。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
+              <div class="feature-row"><div><strong>AI 推测 · 待确认</strong><p>需要真实模型、证据和用户批准；当前没有成功运行证明。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
+              <div class="feature-row"><div><strong>关系洞察</strong><p>仅显示现有可核验关系资料，推测功能仍待验收。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
+              <div class="feature-row"><div><strong>来源与证据</strong><p>只读投影保留来源，不为缺少的证据创建假内容。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
             </div>
           </template>
 
@@ -455,28 +464,32 @@ const selectSection = (id: SettingsSectionId) => {
                 <span class="state-badge" :class="stateClass(translationState)">{{ productStateLabel(translationState) }}</span>
               </div>
               <p v-if="translationHealth?.errorCode">服务状态：{{ translationHealth.errorCode }}</p>
+              <p v-if="translationState === 'Not configured'">尚未配置 DeepL 凭据或授权。请完成官方翻译服务配置后重新检查；本地联系人语言与完整性检查不能替代翻译接口。</p>
+              <p v-else-if="translationState === 'Needs attention'">翻译健康检查失败或服务异常；查看后端翻译日志并重试，不能判定为已连接。</p>
+              <p v-else-if="translationState === 'Connected'">翻译健康接口报告已连接；实际入站、出站翻译仍须在对话中验证。</p>
               <button type="button" class="text-action" :disabled="translationLoading" @click="loadTranslationHealth">
                 重新检查
               </button>
             </div>
             <div class="feature-list">
-              <div class="feature-row"><div><strong>联系人语言</strong><p>在对话 Composer 中保存到现有联系人 metadata；Auto 会使用已确认的观察语言。</p></div><span class="state-badge connected">{{ productStateLabel('Connected') }}</span></div>
+              <div class="feature-row"><div><strong>联系人语言</strong><p>联系人语言是本地设置，不是 DeepL 连接状态。可在对话中核实记录。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
               <div class="feature-row"><div><strong>入站理解</strong><p>按精确 ChatHistory.id 生成中文 secondary，不覆盖原文。</p></div><span class="state-badge" :class="stateClass(translationState)">{{ productStateLabel(translationState) }}</span></div>
               <div class="feature-row"><div><strong>出站预览</strong><p>保留 Persona、口语程度、emoji 与聊天节奏，通过后才允许采用。</p></div><span class="state-badge" :class="stateClass(translationState)">{{ productStateLabel(translationState) }}</span></div>
-              <div class="feature-row"><div><strong>完整性 / stale</strong><p>URL、@mention、数字、货币、日期时间、emoji、换行、否定等不一致即 fail-closed；源文变化即 stale。</p></div><span class="state-badge connected">{{ productStateLabel('Connected') }}</span></div>
+              <div class="feature-row"><div><strong>完整性 / stale</strong><p>本地校验规则独立于翻译提供商健康；缺少翻译结果时不能保证可生成译文。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
             </div>
           </template>
 
           <template v-else-if="selectedId === 'voice-media'">
-            <div class="notice-card unavailable" data-settings-runtime-state="voice-media-unavailable">
-              <strong>语音与媒体管理暂不可用</strong>
-              <p>当前版本没有可在设置页中安全管理的语音档案、生成媒体或视频配置。</p>
+            <div class="notice-card attention" data-settings-runtime-state="voice-media-runtime-unverified">
+              <strong>现有媒体收发与生成配置分别核验</strong>
+              <p>消息附件继续使用对话中的原生 FileAttachment；语音合成、转写和媒体生成尚无当前运行环境的成功凭证，须检查服务配置并完成实际试用，不能一概称为不可用或已连接。</p>
+              <RouterLink class="secondary-action" to="/yance">进入对话查看附件</RouterLink>
             </div>
             <div class="feature-list">
-              <div class="feature-row"><div><strong>语音档案</strong><p>选择和管理可用语音。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>默认语音预览</strong><p>试听并确认默认语音。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>媒体库</strong><p>浏览可采用的媒体资产。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>生成与编辑</strong><p>创建或编辑图片、视频和音频。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
+              <div class="feature-row"><div><strong>语音档案</strong><p>语音供应商与身份配置待实际验证；没有配置时不得显示可用声音。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
+              <div class="feature-row"><div><strong>默认语音预览</strong><p>需要服务授权与真实试听通过后才可认定可用。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
+              <div class="feature-row"><div><strong>消息附件</strong><p>消息附件由现有 FileAttachment 保存，在对话查看；独立媒体库尚未核验。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
+              <div class="feature-row"><div><strong>生成与编辑</strong><p>供应商、授权和实际生成调用需逐项验证；不代表服务已连接。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
             </div>
           </template>
 
@@ -489,10 +502,10 @@ const selectSection = (id: SettingsSectionId) => {
               <RouterLink class="primary-action" to="/yance">打开对话</RouterLink>
             </div>
             <div class="feature-list">
-              <div class="feature-row"><div><strong>由我回复</strong><p>由你决定并发送回复。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>建议我</strong><p>生成建议，由你确认后发送。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>自动处理</strong><p>需要明确权限和可用的自动处理设置。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
-              <div class="feature-row"><div><strong>敏感动作确认</strong><p>高风险操作应要求确认。</p></div><span class="state-badge unavailable">{{ productStateLabel('Unavailable') }}</span></div>
+              <div class="feature-row"><div><strong>由我回复</strong><p>在对话 Composer 由用户手动发送；不是外部服务连接。</p></div><span class="state-badge available">{{ productStateLabel('Available') }}</span></div>
+              <div class="feature-row"><div><strong>建议我</strong><p>复用已有 Reply Brain；实际生成仍依赖已配置且可推理的模型。</p></div><span class="state-badge" :class="stateClass(aiState)">{{ productStateLabel(aiState) }}</span></div>
+              <div class="feature-row"><div><strong>自动处理</strong><p>已有回复模式入口；自动发送必须经账号、策略和真实运行检查。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
+              <div class="feature-row"><div><strong>敏感动作确认</strong><p>沿用原生确认流程；端到端权限阻断还需独立测试。</p></div><span class="state-badge verification-pending">{{ productStateLabel('Verification pending') }}</span></div>
             </div>
           </template>
 
@@ -503,7 +516,7 @@ const selectSection = (id: SettingsSectionId) => {
                   <h3>外观模式</h3>
                   <p>立即应用到当前界面。</p>
                 </div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <span class="state-badge available">{{ productStateLabel('Available') }}</span>
               </div>
               <div class="theme-options" role="group" aria-label="外观模式">
                 <button
@@ -550,8 +563,8 @@ const selectSection = (id: SettingsSectionId) => {
 
           <template v-else-if="selectedId === 'privacy'">
             <div class="notice-card attention" data-settings-runtime-state="system-lifecycle-mixed">
-              <strong>系统能力按 owner 分开显示</strong>
-              <p>网页上传与对话导出已接现有 owner；桌面 picker / Velopack 更新只能由最终 Tauri 安装包验证，保持 PACKAGE_UAT_HOLD。</p>
+              <strong>网页功能与安装包验收分开显示</strong>
+              <p>网页上传、对话导出已有操作入口；桌面文件选择器、备份恢复和更新功能仍待最终安装包验证，不代表已连接。</p>
             </div>
             <div class="feature-list">
               <div class="feature-row" data-native-owner="FileUpload/FileAttachment">
@@ -563,8 +576,8 @@ const selectSection = (id: SettingsSectionId) => {
                 <span class="state-badge needs-attention">{{ productStateLabel('Needs attention') }}</span>
               </div>
               <div class="feature-row" data-native-owner="ChatHistory/FileAttachment">
-                <div><strong>对话导出</strong><p>Conversation 详情中的 Export Conversation 直接读取 canonical ChatHistory + FileAttachment。</p></div>
-                <span class="state-badge connected">{{ productStateLabel('Connected') }}</span>
+                <div><strong>对话导出</strong><p>使用现有 Conversation 导出入口；仅表示本地功能，真实数据导出仍按权限测试。</p></div>
+                <span class="state-badge available">{{ productStateLabel('Available') }}</span>
               </div>
               <div class="feature-row" data-native-owner="Velopack" data-settings-runtime-state="package-uat-hold">
                 <div><strong>更新</strong><p>桌面更新 owner = Velopack；C3 不安装第二 Tauri updater，installed-package 行为等待 package UAT。</p></div>
@@ -626,6 +639,7 @@ const selectSection = (id: SettingsSectionId) => {
         </section>
       </div>
     </main>
+      </YanceWebShell>
   </DashboardLayout>
 </template>
 
@@ -779,13 +793,19 @@ const selectSection = (id: SettingsSectionId) => {
 
 .truth-state.connected,
 .state-badge.connected,
-.nav-state.connected {
+.nav-state.connected,
+.truth-state.available,
+.state-badge.available,
+.nav-state.available {
   color: var(--c-teal);
 }
 
 .truth-state.needs-attention,
 .state-badge.needs-attention,
-.nav-state.needs-attention {
+.nav-state.needs-attention,
+.truth-state.verification-pending,
+.state-badge.verification-pending,
+.nav-state.verification-pending {
   color: var(--c-coral);
 }
 

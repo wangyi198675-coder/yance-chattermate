@@ -145,7 +145,7 @@ const userGroups = ref<UserGroup[]>([])
 const loadingGroups = ref(false)
 
 // Auto-save functionality
-const autoSaveTimeout = ref<number | null>(null)
+const autoSaveTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
 
 // Simple debounce implementation
 const debounce = (func: Function, delay: number) => {

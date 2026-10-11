@@ -66,6 +66,18 @@ export type YanceGirlfriendIntentDraft = {
   turnOnly: boolean
 }
 
+export type YanceScopedTurnIntent = {
+  nonce: number
+  action: 'apply' | 'undo'
+  sessionId: string
+  customerId: string
+  agentId: string
+  sourceMessageId: number
+  currentTurnPersona?: string
+  currentGoal?: string
+  doNotLearn?: boolean
+}
+
 export type YanceGirlfriendOrchestrationState =
   | 'idle'
   | 'interpreting'

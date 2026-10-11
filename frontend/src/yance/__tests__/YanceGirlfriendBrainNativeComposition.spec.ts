@@ -12,7 +12,7 @@ const props = {
 describe('YanceGirlfriendBrainNativeComposition', () => {
   it('uses the native BaseModal composition with turn-scoped semantic state', () => {
     const wrapper = mount(YanceGirlfriendBrainNativeComposition, { props })
-    expect(wrapper.get('[role="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
     expect(wrapper.get('[data-yance-girlfriend-turn-only]').element).toBeInstanceOf(HTMLInputElement)
     expect((wrapper.get('[data-yance-girlfriend-turn-only]').element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.get('[data-yance-girlfriend-scope]').text()).toContain('当前关系')
@@ -35,8 +35,11 @@ describe('YanceGirlfriendBrainNativeComposition', () => {
       goalNote: '继续聊天',
       turnOnly: true,
     }])
-    expect(wrapper.find('[data-yance-girlfriend-receipt]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('最终回复仍需回到对话输入框确认并发送')
+    expect(wrapper.find('[data-yance-girlfriend-receipt]').exists()).toBe(false)
+    await wrapper.setProps({ intentFeedback: { state: 'ready', detail: 'Reply Brain 已接收本轮意图；仍须手动生成并确认。', undoAvailable: true } })
+    expect(wrapper.get('[data-yance-girlfriend-receipt]').attributes('data-receipt-state')).toBe('ready')
+    await wrapper.get('[data-yance-girlfriend-local-undo]').trigger('click')
+    expect(wrapper.emitted('undo-request')).toHaveLength(1)
   })
 
   it('projects voice and generative media as truthful non-GREEN states', () => {

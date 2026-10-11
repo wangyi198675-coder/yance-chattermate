@@ -38,6 +38,9 @@ const emit = defineEmits<{
 const title = ref('')
 const description = ref('')
 const priority = ref<TicketPriority>('medium')
+const priorityLabel: Record<TicketPriority, string> = {
+  urgent: '紧急', high: '高', medium: '中', low: '低',
+}
 const fromConversation = ref(false)
 const isDrafting = ref(false)
 const isSubmitting = ref(false)
@@ -117,11 +120,11 @@ async function submit() {
       customer_email: !linkSession ? customerEmail.value.trim() || undefined : undefined,
       customer_name: !linkSession ? customerName.value.trim() || undefined : undefined,
     })
-    toast.success(`Ticket ${detail.ticket.display_number} created`)
+    toast.success(`工单 ${detail.ticket.display_number} 已创建`)
     emit('created', detail)
     emit('close')
   } catch (e: any) {
-    toast.error(e?.message || 'Failed to create the ticket')
+    toast.error(e?.message || '创建工单失败')
   } finally {
     isSubmitting.value = false
   }
@@ -133,8 +136,8 @@ async function submit() {
     <div v-if="open" class="modal-overlay" @click="emit('close')">
       <div class="modal" @click.stop>
         <div class="modal-header">
-          <div class="modal-title">New ticket</div>
-          <button class="close-btn" @click="emit('close')">×</button>
+          <div class="modal-title">新建工单</div>
+          <button class="close-btn" aria-label="关闭新建工单弹窗" @click="emit('close')">×</button>
         </div>
         <div class="modal-body">
           <div v-if="sessionId" class="source-toggle">
@@ -143,44 +146,44 @@ async function submit() {
               :class="{ active: !fromConversation }"
               @click="fromConversation = false"
             >
-              Blank
+              手动填写
             </button>
             <button
               class="source-option"
               :class="{ active: fromConversation }"
               @click="useConversationDraft"
             >
-              From conversation
+              从对话生成
             </button>
           </div>
 
           <div v-if="fromConversation" class="draft-note">
             <span class="draft-glyph">✎</span>
-            <span v-if="isDrafting">Drafting from the conversation…</span>
+            <span v-if="isDrafting">正在根据对话生成草稿…</span>
             <span v-else>
-              Drafted from
-              <span class="mono">{{ sessionLabel || 'the conversation' }}</span>
-              — edit anything.
+              已根据
+              <span class="mono">{{ sessionLabel || '当前对话' }}</span>
+              生成草稿，可以继续编辑。
             </span>
           </div>
 
-          <label class="field-label">Title</label>
+          <label class="field-label">工单标题</label>
           <input
             v-model="title"
             class="field-input"
-            placeholder="Short summary of the issue…"
+            placeholder="简要描述问题…"
             maxlength="500"
           />
 
-          <label class="field-label">Description</label>
+          <label class="field-label">问题描述</label>
           <textarea
             v-model="description"
             class="field-textarea"
-            placeholder="What's happening? Include any error, customer impact, and steps…"
+            placeholder="说明问题现象、错误信息、对客户的影响及复现步骤…"
           ></textarea>
 
           <template v-if="!fromConversation">
-            <label class="field-label">Customer email <span class="optional">(optional — used to notify them)</span></label>
+            <label class="field-label">客户邮箱 <span class="optional">（选填，用于发送通知）</span></label>
             <input
               v-model="customerEmail"
               class="field-input"
@@ -200,17 +203,17 @@ async function submit() {
             </datalist>
 
             <template v-if="customerEmail.trim()">
-              <label class="field-label">Customer name <span class="optional">(optional)</span></label>
+              <label class="field-label">客户姓名 <span class="optional">（选填）</span></label>
               <input
                 v-model="customerName"
                 class="field-input"
-                placeholder="Jane Doe"
+                placeholder="请输入客户姓名"
                 maxlength="200"
               />
             </template>
           </template>
 
-          <label class="field-label">Priority</label>
+          <label class="field-label">优先级</label>
           <div class="priority-pills">
             <button
               v-for="p in PRIORITIES"
@@ -220,14 +223,14 @@ async function submit() {
               :style="{ '--pill-color': priorityMeta(p).color }"
               @click="priority = p"
             >
-              <span class="dot"></span>{{ priorityMeta(p).label }}
+              <span class="dot"></span>{{ priorityLabel[p] }}
             </button>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn-secondary" @click="emit('close')">Cancel</button>
+          <button class="btn-secondary" @click="emit('close')">取消</button>
           <button class="btn-primary" :disabled="!title.trim() || isSubmitting" @click="submit">
-            {{ isSubmitting ? 'Creating…' : 'Create ticket' }}
+            {{ isSubmitting ? '正在创建…' : '创建工单' }}
           </button>
         </div>
       </div>
@@ -239,7 +242,7 @@ async function submit() {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: var(--z-modal);
   background: var(--scrim, rgba(4, 5, 8, 0.62));
   backdrop-filter: blur(6px);
   display: flex;

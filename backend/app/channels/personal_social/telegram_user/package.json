@@ -1,0 +1,13 @@
+{
+  "name": "yance-telegram-personal-gramjs",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Windows private Node GramJS MTProto user transport; no separate persistence",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "telegram": "2.26.22"
+  }
+}

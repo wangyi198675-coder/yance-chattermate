@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import YanceWebShell from './components/YanceWebShell.vue'
 import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import DashboardLayout from '@/layouts/DashboardLayout.vue'
@@ -64,6 +65,7 @@ onMounted(() => { void loadPeople() })
 
 <template>
   <DashboardLayout>
+    <YanceWebShell>
     <main class="yance-directory" data-yance-people-directory>
       <header class="directory-head">
         <div><p>言策 Yance</p><h1>人物目录</h1><span>读取已有联系人资料，不创建另一套客户数据库。</span></div>
@@ -101,6 +103,7 @@ onMounted(() => { void loadPeople() })
         <button type="button" :disabled="page >= pages" @click="turnPage(page + 1)">下一页</button>
       </footer>
     </main>
+      </YanceWebShell>
   </DashboardLayout>
 </template>
 

@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import YanceWebShell from './components/YanceWebShell.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatDistanceToNow } from 'date-fns'
 import DashboardLayout from '@/layouts/DashboardLayout.vue'
+import YanceFirstRunHome from './components/YanceFirstRunHome.vue'
 import ChannelBadge from '@/components/common/ChannelBadge.vue'
 import HandlerBadge from '@/components/conversations/HandlerBadge.vue'
 import CustomerAvatar from '@/components/people/CustomerAvatar.vue'
@@ -17,6 +19,7 @@ const router = useRouter()
 const currentUserId = userService.getUserId()
 const conversations = ref<Conversation[]>([])
 const loading = ref(true)
+const firstRunEmpty = computed(() => !loading.value && !error.value && !channelStatusLoading.value && !channelStatusError.value && channelAccounts.value !== null && channelAccounts.value.length === 0 && conversations.value.length === 0)
 const error = ref('')
 
 const channelAccounts = ref<ChannelAccount[] | null>(null)
@@ -130,12 +133,13 @@ onMounted(() => {
 
 <template>
   <DashboardLayout>
+    <YanceWebShell :connection-summary="connectionStatusLabel">
     <main class="yance-home-native" data-yance-home-native-composition>
       <header class="home-heading">
         <div>
-          <p class="eyebrow">言策 Yance</p>
-          <h1>首页</h1>
-          <p class="home-subtitle">把近期对话、值得关注的事项和平台状态集中在这里。</p>
+          <p class="eyebrow">{{ firstRunEmpty ? '真实空账号场景 · 交互设计' : '言策 Yance' }}</p>
+          <h1>{{ firstRunEmpty ? '今天的工作台' : '首页' }}</h1>
+          <p v-if="!firstRunEmpty" class="home-subtitle">把近期对话、值得关注的事项和平台状态集中在这里。</p>
         </div>
         <div class="home-heading-actions">
           <button type="button" class="nav-link active" aria-current="page">首页</button>
@@ -146,12 +150,14 @@ onMounted(() => {
         </div>
       </header>
 
-      <div class="connection-pill" :class="{ warning: channelStatusError || inactiveAccounts.length > 0 }">
+      <YanceFirstRunHome v-if="firstRunEmpty" :supported-platforms="8" :connected-platforms="activeAccountCount" />
+
+      <div v-show="!firstRunEmpty" class="connection-pill" :class="{ warning: channelStatusError || inactiveAccounts.length > 0 }">
         <span class="connection-dot" aria-hidden="true"></span>
         <span>{{ connectionStatusLabel }}</span>
       </div>
 
-      <section class="home-section continue-section" aria-labelledby="continue-title">
+      <section v-show="!firstRunEmpty" class="home-section continue-section" aria-labelledby="continue-title">
         <div class="section-title-row">
           <div>
             <h2 id="continue-title">继续对话</h2>
@@ -217,7 +223,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <div class="home-lower-grid">
+      <div v-show="!firstRunEmpty" class="home-lower-grid">
         <section class="home-section recent-activity" aria-labelledby="recent-title" data-home-recent-activity>
           <div class="section-title-row">
             <div>
@@ -336,6 +342,7 @@ onMounted(() => {
         </div>
       </div>
     </main>
+      </YanceWebShell>
   </DashboardLayout>
 </template>
 

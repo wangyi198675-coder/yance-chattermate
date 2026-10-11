@@ -17,6 +17,64 @@ from app.models.user import User
 from app.repositories.chat import ChatRepository
 from app.repositories.session_to_agent import SessionToAgentRepository
 from tests.conftest import TestingSessionLocal
+import os
+import sys
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+
+
+@pytest.fixture
+def db(monkeypatch):
+    """Real migrated PostgreSQL, cloned per test with independent connections.
+
+    Never use the shared SQLite StaticPool: it does not prove persistence across
+    connections and falsely loses tables when concurrent sessions roll back.
+    The admin/template database must be a disposable, migrated W381 test DB.
+    """
+    dsn = os.environ.get("W381_TEST_POSTGRES_URL")
+    if not dsn:
+        pytest.fail("W381_TEST_POSTGRES_URL is required: real migrated PostgreSQL, not SQLite")
+    url = make_url(dsn)
+    if (not url.drivername.startswith("postgresql")
+            or url.host not in ("127.0.0.1", "localhost")
+            or not (url.database or "").startswith("w381_test_")):
+        pytest.fail("Refusing nonlocal or non-disposable W381 PostgreSQL test database")
+    template_db = url.database
+    child_db = "w381_test_" + uuid4().hex
+    admin_engine = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    child_engine = None
+    connection = None
+    try:
+        with admin_engine.connect() as admin:
+            # CREATE DATABASE ... TEMPLATE copies actual Alembic tables, indexes,
+            # constraints, PG-native types and committed data, not a SQLite mock.
+            admin.exec_driver_sql(
+                f'CREATE DATABASE "{child_db}" TEMPLATE "{template_db}"'
+            )
+        child_engine = create_engine(url.set(database=child_db), poolclass=NullPool)
+        with child_engine.connect() as check:
+            version = check.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version, "Template PostgreSQL must have completed Alembic migrations"
+            assert check.execute(text("SELECT to_regclass('public.session_to_agents')")).scalar_one()
+            assert check.execute(text("SELECT to_regclass('public.user_notification_settings')")).scalar_one()
+        maker = sessionmaker(autocommit=False, autoflush=False, bind=child_engine)
+        monkeypatch.setattr(sys.modules[__name__], "TestingSessionLocal", maker)
+        connection = maker()
+        real_close = connection.close
+        connection.close = lambda: None
+        try:
+            yield connection
+        finally:
+            real_close()
+    finally:
+        if child_engine is not None:
+            child_engine.dispose()
+        with admin_engine.connect() as admin:
+            admin.exec_driver_sql(f'DROP DATABASE IF EXISTS "{child_db}" WITH (FORCE)')
+        admin_engine.dispose()
 
 
 def _session(db, user, customer, agent):

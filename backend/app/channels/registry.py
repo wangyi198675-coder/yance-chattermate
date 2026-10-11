@@ -51,3 +51,6 @@ def _ensure_loaded() -> None:
     from app.channels import email  # noqa: F401
     from app.channels import sms  # noqa: F401
     from app.channels import line  # noqa: F401
+    # Native personal bridge registers adapter contracts only; importing it
+    # never starts a Node worker, accesses secrets or logs into a provider.
+    from app.channels.personal_social import native_bridge  # noqa: F401

@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
 
 /**
@@ -183,5 +183,142 @@ describe('the composer while a reply is in flight', () => {
         expect(send.attributes('disabled')).toBeDefined()
 
         wrapper.unmount()
+    })
+
+    it('keeps native composer listeners while mounted and cancels DOM work on unmount', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        const queryAll = vi.spyOn(document, 'querySelectorAll')
+        const wrapper = mount(WidgetBuilder, {
+            props: { widgetId: 'w-1', token: 'tok-1' },
+            attachTo: document.body,
+        })
+        try {
+            await flushPromises()
+            const input = composer(wrapper).element as HTMLInputElement
+            const addListener = vi.spyOn(input, 'addEventListener')
+            const removeListener = vi.spyOn(input, 'removeEventListener')
+
+            await vi.advanceTimersByTimeAsync(150)
+            expect(queryAll).toHaveBeenCalled()
+            expect(addListener).toHaveBeenCalledWith('input', expect.any(Function), true)
+            expect(composer(wrapper).attributes('disabled')).toBeUndefined()
+
+            // Queue native observer work while the widget is still mounted.
+            input.parentElement?.appendChild(document.createElement('input'))
+            await Promise.resolve()
+            wrapper.unmount()
+            expect(removeListener).toHaveBeenCalledWith('input', expect.any(Function), true)
+            queryAll.mockClear()
+            await vi.advanceTimersByTimeAsync(750)
+            expect(queryAll).not.toHaveBeenCalled()
+        } finally {
+            wrapper.unmount()
+            queryAll.mockRestore()
+            vi.useRealTimers()
+        }
+    })
+
+    it('does not install listeners after authorization resolves beyond unmount', async () => {
+        let completeFetch!: (response: unknown) => void
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { completeFetch = resolve })))
+        const addListener = vi.spyOn(document, 'addEventListener')
+        const query = vi.spyOn(document, 'querySelector')
+        const wrapper = mount(WidgetBuilder, { props: { widgetId: 'w-1', token: 'tok-1' } })
+        try {
+            await wrapper.vm.$nextTick()
+            expect(fetch).toHaveBeenCalled()
+            wrapper.unmount()
+            completeFetch({
+                ok: true, status: 200,
+                json: async () => ({ agent: { name: 'Ada' } }),
+            })
+            await flushPromises()
+            expect(addListener).not.toHaveBeenCalledWith('click', expect.any(Function))
+
+            query.mockClear()
+            window.dispatchEvent(new MessageEvent('message', {
+                source: window.parent,
+                data: { type: 'PREFILL_MESSAGE', text: 'stale host event' },
+            }))
+            await flushPromises()
+            expect(query).not.toHaveBeenCalled()
+        } finally {
+            wrapper.unmount()
+            addListener.mockRestore()
+            query.mockRestore()
+        }
+    })
+
+    it('ignores queued PREFILL_MESSAGE callback after unmount', async () => {
+        const wrapper = mount(WidgetBuilder, { props: { widgetId: 'w-1', token: 'tok-1' } })
+        await flushPromises()
+        const query = vi.spyOn(document, 'querySelector')
+        try {
+            window.dispatchEvent(new MessageEvent('message', {
+                source: window.parent,
+                data: { type: 'PREFILL_MESSAGE', text: 'queued-before-unmount' },
+            }))
+            wrapper.unmount()
+            query.mockClear()
+            await flushPromises()
+            expect(query).not.toHaveBeenCalled()
+        } finally {
+            wrapper.unmount()
+            query.mockRestore()
+        }
+    })
+
+    it('cancels initialization polling when unmounted without widgetId', async () => {
+        const saved = (window as any).__INITIAL_DATA__
+        delete (window as any).__INITIAL_DATA__
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        // Vitest runs other suites concurrently: global timer count can include
+        // unrelated jsdom/component timers. Assert cleanup of this widget's
+        // own 100ms widgetId poll handle, not every timer in the process.
+        const schedule = vi.spyOn(globalThis, 'setTimeout')
+        const cancel = vi.spyOn(globalThis, 'clearTimeout')
+        const wrapper = mount(WidgetBuilder, { props: { widgetId: 'w-1', token: 'tok-1' } })
+        try {
+            await vi.advanceTimersByTimeAsync(0)
+            const polls = schedule.mock.calls
+                .map((args, i) => ({ delay: args[1], handle: schedule.mock.results[i]?.value }))
+                .filter(poll => poll.delay === 100 && poll.handle != null)
+            expect(polls.length).toBeGreaterThan(0)
+            wrapper.unmount()
+            // Removing cancelPendingWidgetIdPolls() from WidgetBuilder must
+            // break this test even if an unrelated timer remains pending.
+            for (const poll of polls) {
+                expect(cancel.mock.calls.some(args => args[0] === poll.handle)).toBe(true)
+            }
+            const pollCountAfterUnmount = schedule.mock.calls.filter(args => args[1] === 100).length
+            await vi.advanceTimersByTimeAsync(500)
+            expect(schedule.mock.calls.filter(args => args[1] === 100).length).toBe(pollCountAfterUnmount)
+        } finally {
+            wrapper.unmount()
+            schedule.mockRestore()
+            cancel.mockRestore()
+            vi.clearAllTimers()
+            vi.useRealTimers()
+            ;(window as any).__INITIAL_DATA__ = saved
+        }
+    })
+
+    it('resumes initialization when widgetId arrives while still mounted', async () => {
+        const saved = (window as any).__INITIAL_DATA__
+        delete (window as any).__INITIAL_DATA__
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        const wrapper = mount(WidgetBuilder, { props: { widgetId: 'w-1', token: 'tok-1' } })
+        try {
+            await vi.advanceTimersByTimeAsync(0)
+            expect(fetch).not.toHaveBeenCalled()
+            ;(window as any).__INITIAL_DATA__ = { ...saved, widgetId: 'w-late' }
+            await vi.advanceTimersByTimeAsync(100)
+            expect(fetch).toHaveBeenCalled()
+        } finally {
+            wrapper.unmount()
+            vi.clearAllTimers()
+            vi.useRealTimers()
+            ;(window as any).__INITIAL_DATA__ = saved
+        }
     })
 })

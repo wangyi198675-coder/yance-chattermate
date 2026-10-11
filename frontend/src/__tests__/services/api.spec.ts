@@ -149,12 +149,14 @@ describe('api client', () => {
 
     await expect(api.get('/agents', { adapter })).rejects.toThrow('refresh expired')
 
-    expect(clearCurrentUser).toHaveBeenCalled()
-    expect(push).toHaveBeenCalledWith('/login')
+    expect(clearCurrentUser).toHaveBeenCalledTimes(1)
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(push).toHaveBeenCalledWith('/yance')
+    expect(push).not.toHaveBeenCalledWith('/login')
     expect(document.cookie).not.toContain('user_info=someone')
   })
 
-  it('goes straight to login on a 401 when nobody is signed in', async () => {
+  it('clears unauthenticated 401 state and returns to private Yance bootstrap without refreshing', async () => {
     isAuthenticated.mockReturnValue(false)
     const { api, axios } = await loadApi()
     const refresh = vi.spyOn(axios, 'post')
@@ -166,7 +168,11 @@ describe('api client', () => {
 
     expect(refresh).not.toHaveBeenCalled()
     expect(seen).toHaveLength(1)
-    expect(push).toHaveBeenCalledWith('/login')
+    expect(clearCurrentUser).toHaveBeenCalledTimes(1)
+    expect(document.cookie).not.toContain('user_info=someone')
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(push).toHaveBeenCalledWith('/yance')
+    expect(push).not.toHaveBeenCalledWith('/login')
   })
 
   it('passes other error statuses through untouched', async () => {

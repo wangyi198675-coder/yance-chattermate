@@ -29,7 +29,7 @@ from sqlalchemy import func, or_, select, text, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import case
 from app.models.agent import Agent
-from app.models.session_to_agent import SessionToAgent
+from app.models.session_to_agent import SessionToAgent, SessionStatus
 from app.repositories.channels import ChannelConversationRepository
 from app.core.logger import get_logger
 from app.channels.constants import is_widget_channel
@@ -893,12 +893,16 @@ class ChatRepository:
         
         # Filter by status if provided
         if status and status != 'all':
-            # Handle comma-separated status values
-            if ',' in status:
-                status_values = [s.strip() for s in status.split(',')]
-                query = query.filter(SessionToAgent.status.in_(status_values))
+            # The HTTP API exposes lower-case values, while SQLAlchemy persists
+            # SessionStatus enum NAMES (OPEN/TRANSFERRED/CLOSED) on PostgreSQL.
+            # Bind enum members, never raw client strings: raw 'open' fails with
+            # invalid input value for enum sessionstatus in production.
+            status_values = [SessionStatus(raw.strip().lower())
+                             for raw in status.split(',')]
+            if len(status_values) == 1:
+                query = query.filter(SessionToAgent.status == status_values[0])
             else:
-                query = query.filter(SessionToAgent.status == status)
+                query = query.filter(SessionToAgent.status.in_(status_values))
         
         # Filter by organization
         if organization_id:

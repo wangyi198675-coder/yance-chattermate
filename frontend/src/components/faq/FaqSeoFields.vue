@@ -87,30 +87,30 @@ function onInput(event: Event): string {
         <path d="M9 6l6 6-6 6" />
       </svg>
       SEO &amp; URL
-      <span v-if="hasValues" class="seo__badge">customised</span>
+      <span v-if="hasValues" class="seo__badge">已自定义</span>
     </button>
 
     <div v-if="expanded" class="seo__fields">
       <label class="seo__field">
-        <span class="seo__label">URL slug</span>
+        <span class="seo__label">URL 短链接标识</span>
         <span class="seo__slug">
           <span class="seo__prefix">/a/</span>
           <input
             type="text"
             class="seo__input seo__input--slug"
             :maxlength="MAX_SLUG"
-            placeholder="auto-generated from the question"
+            placeholder="根据问题自动生成"
             :value="slug"
             @input="emit('update:slug', onInput($event))"
           />
         </span>
         <span class="seo__hint">
-          Changing this breaks existing links to the article. Spaces and symbols become hyphens.
+          修改此字段可能使已有文章链接失效，空格和符号会转换为连字符。
         </span>
       </label>
 
       <label class="seo__field">
-        <span class="seo__label">Custom URL path</span>
+        <span class="seo__label">自定义 URL 路径</span>
         <input
           type="text"
           class="seo__input seo__input--path"
@@ -120,15 +120,14 @@ function onInput(event: Event): string {
           @input="emit('update:urlPath', onInput($event))"
         />
         <span class="seo__hint">
-          Serve this article at a URL it already has on another help center, so its
-          search ranking and inbound links survive the move. Paste the old URL or path.
-          Leave empty to use the slug above.
+          如果文章已在其他帮助中心发布，可保留原有 URL 路径以维护搜索排名与外部链接。
+          请输入旧 URL 或路径；留空时使用上方短链接标识。
         </span>
       </label>
 
       <label class="seo__field">
         <span class="seo__label">
-          Meta title
+          SEO 标题
           <span class="seo__count" :class="{ 'seo__count--over': titleCount > RECOMMENDED_TITLE }">
             {{ titleCount }}/{{ RECOMMENDED_TITLE }}
           </span>
@@ -137,7 +136,7 @@ function onInput(event: Event): string {
           type="text"
           class="seo__input"
           :maxlength="MAX_TITLE"
-          :placeholder="question || 'Defaults to the question'"
+          :placeholder="question || '默认使用问题标题'"
           :value="metaTitle"
           @input="emit('update:metaTitle', onInput($event))"
         />
@@ -145,7 +144,7 @@ function onInput(event: Event): string {
 
       <label class="seo__field">
         <span class="seo__label">
-          Meta description
+          SEO 描述
           <span
             class="seo__count"
             :class="{ 'seo__count--over': descriptionCount > RECOMMENDED_DESCRIPTION }"
@@ -157,7 +156,7 @@ function onInput(event: Event): string {
           class="seo__input seo__textarea"
           rows="2"
           :maxlength="MAX_DESCRIPTION"
-          placeholder="Defaults to the start of the answer"
+          placeholder="默认使用答案开头内容"
           :value="metaDescription"
           @input="emit('update:metaDescription', onInput($event))"
         ></textarea>

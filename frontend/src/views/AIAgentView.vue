@@ -37,6 +37,10 @@ const handleWorkflowFullscreenToggle = (isFullscreen: boolean) => {
         <div class="dashboard-container">
             <!-- Main Chat Area -->
             <div class="chat-section">
+                <header v-if="!isWorkflowFullscreen" class="native-page-intro">
+                    <h1>AI 智能体</h1>
+                    <p>创建和管理智能体，查看真实配置及运行状态。</p>
+                </header>
                 <AIAgentSetup :model="selectedModel" @toggle-fullscreen="handleWorkflowFullscreenToggle" />
             </div>
         </div>
@@ -54,4 +58,7 @@ const handleWorkflowFullscreenToggle = (isFullscreen: boolean) => {
     flex: 1;
     min-width: 0;
 }
+.native-page-intro { padding: 14px 20px 0; }
+.native-page-intro h1 { margin: 0; font-size: 19px; color: var(--text); }
+.native-page-intro p { margin: 5px 0 12px; color: var(--muted); font-size: 12px; }
 </style>

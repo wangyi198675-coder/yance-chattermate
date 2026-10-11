@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ChatDetail, Conversation, Message } from '@/types/chat'
 import ConversationsView from '@/views/ConversationsView.vue'
+import { chatService } from '@/services/chat'
+import YanceEmptyConversation from './components/YanceEmptyConversation.vue'
 import YanceBilingualMessageProjection from './components/YanceBilingualMessageProjection.vue'
 import YanceGirlfriendBrainNativeComposition from './components/YanceGirlfriendBrainNativeComposition.vue'
 import YanceReplyBrainCandidateCard from './components/YanceReplyBrainCandidateCard.vue'
@@ -12,6 +14,7 @@ import type {
   YanceGirlfriendOrchestrationProjection,
   YanceReplyBrainCandidate,
   YanceReplyBrainStateProjection,
+  YanceScopedTurnIntent,
   YanceTranslationProjection,
 } from './semanticTypes'
 import {
@@ -34,19 +37,21 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (event: 'capability-route', route: FrozenCapabilityRoute): void
-  (event: 'girlfriend-intent-draft', draft: YanceGirlfriendIntentDraft): void
   (event: 'reply-recompute'): void
   (event: 'girlfriend-undo-request'): void
   (event: 'girlfriend-permission-decision', decision: 'allow-once' | 'cancel'): void
-  (event: 'persona-turn-override', payload: {
-    agentId: string
-    customerId: string
-    sessionId: string
-    seedId: string
-    instructions: string[]
-  }): void
 }>()
 
+const nativeEmptyConversations = ref(false)
+const nativeEmptyLoading = ref(false)
+const refreshNativeConversationEmpty = async () => {
+  nativeEmptyLoading.value = true
+  try {
+    const conversations = await chatService.getRecentChats({ limit: 1, status: 'all' })
+    nativeEmptyConversations.value = Array.isArray(conversations) && conversations.length === 0 && !new URLSearchParams(window.location.search).has('session')
+  } catch { nativeEmptyConversations.value = false }
+  finally { nativeEmptyLoading.value = false }
+}
 const replyBrainOpen = ref(false)
 const expanded = ref(false)
 const hasExternalReplyProjection = computed(
@@ -54,6 +59,62 @@ const hasExternalReplyProjection = computed(
 )
 const girlfriendBrainOpen = ref(false)
 const personaStudioChat = ref<ChatDetail | null>(null)
+type ActiveTurn = { sessionId: string; customerId: string; agentId: string; sourceMessageId: number | null }
+const activeTurn = ref<ActiveTurn | null>(null)
+const girlfriendTarget = ref<ActiveTurn | null>(null)
+const personaTarget = ref<ActiveTurn | null>(null)
+const stagedTurnIntent = ref<YanceScopedTurnIntent | null>(null)
+const girlfriendFeedback = ref<{ state: 'pending' | 'ready' | 'error'; detail: string; undoAvailable?: boolean } | null>(null)
+const personaFeedback = ref('')
+let intentNonce = 0
+
+const sourceTurn = (chat: ChatDetail): ActiveTurn => {
+  const inbound = chat.messages.filter(m => m.message_type === 'user' && typeof m.id === 'number')
+  return {
+    sessionId: chat.session_id, customerId: chat.customer.id, agentId: chat.agent.id,
+    sourceMessageId: inbound.length ? Number(inbound[inbound.length - 1].id) : null,
+  }
+}
+const sameTurn = (left: ActiveTurn | null, right: ActiveTurn | null) =>
+  !!left && !!right && left.sessionId === right.sessionId
+  && left.customerId === right.customerId && left.agentId === right.agentId
+  && left.sourceMessageId !== null && left.sourceMessageId === right.sourceMessageId
+const receiveActiveTurn = (identity: ActiveTurn) => {
+  if (activeTurn.value && !sameTurn(activeTurn.value, identity)) {
+    stagedTurnIntent.value = null
+    girlfriendFeedback.value = null
+    personaFeedback.value = ''
+    girlfriendTarget.value = null
+    personaTarget.value = null
+    girlfriendBrainOpen.value = false
+    personaStudioChat.value = null
+  }
+  activeTurn.value = identity
+}
+const receiveIntentReceipt = (receipt: { nonce: number; accepted: boolean; undone?: boolean; detail: string }) => {
+  if (receipt.nonce !== stagedTurnIntent.value?.nonce) return
+  girlfriendFeedback.value = {
+    state: receipt.accepted ? 'ready' : 'error', detail: receipt.detail,
+    undoAvailable: receipt.accepted && !receipt.undone,
+  }
+  personaFeedback.value = receipt.detail
+  if (!receipt.accepted || receipt.undone) stagedTurnIntent.value = null
+}
+const requestTurnIntent = (identity: ActiveTurn | null, persona: string, goal?: string, doNotLearn?: boolean) => {
+  if (!identity || !sameTurn(activeTurn.value, identity)) return '联系人或回合已变化，未应用。'
+  if (!persona.trim() || persona.length > 1600 || /[\u0000-\u001f\u007f]/.test(persona)) return '内容为空、超限或包含无效控制字符。'
+  if (goal && goal.length > 600) return '当前目标超过原生 600 字限制。'
+  if (hasExternalReplyProjection.value) return '当前使用外部只读建议投影，原生 Reply Brain 不可接收本轮意图。'
+  stagedTurnIntent.value = {
+    nonce: ++intentNonce, action: 'apply', sessionId: identity.sessionId,
+    customerId: identity.customerId, agentId: identity.agentId,
+    sourceMessageId: identity.sourceMessageId!, currentTurnPersona: persona,
+    currentGoal: goal, doNotLearn,
+  }
+  replyBrainOpen.value = true
+  girlfriendFeedback.value = { state: 'pending', detail: '正在交给当前 Reply Brain…' }
+  return ''
+}
 
 const boundedCandidates = computed(() => props.replyCandidates.slice(0, 5))
 const visibleCandidates = computed(() => boundedCandidates.value.slice(0, expanded.value ? 5 : 3))
@@ -114,21 +175,43 @@ const toggleReplyBrain = () => {
   if (replyBrainOpen.value) routeCapability('reply-brain')
 }
 
-const openGirlfriendBrain = () => {
+const openGirlfriendBrain = (chat: ChatDetail | null) => {
+  girlfriendTarget.value = chat ? sourceTurn(chat) : activeTurn.value
+  girlfriendFeedback.value = null
   girlfriendBrainOpen.value = true
   routeCapability('girlfriend-brain')
 }
 
 const closeGirlfriendBrain = () => {
   girlfriendBrainOpen.value = false
+  girlfriendTarget.value = null
 }
 
+const onGlobalGFShortcut = (event: KeyboardEvent) => {
+  if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey
+      && event.key.toLowerCase() === 'g') {
+    // Never open a second modal over an already active global task or
+    // platform connection dialog. The topmost dialog owns its shortcut.
+    if (document.querySelector('[data-yance-global-girlfriend], .meta-modal-content, .tg-modal-content, .cc-modal-content')) return
+    event.preventDefault()
+    if (girlfriendBrainOpen.value) closeGirlfriendBrain()
+    else openGirlfriendBrain(null)
+  }
+}
+onMounted(() => {
+  document.addEventListener('keydown', onGlobalGFShortcut)
+  void refreshNativeConversationEmpty()
+})
+onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalGFShortcut))
+
 const openPersonaStudio = (chat: ChatDetail) => {
+  personaTarget.value = sourceTurn(chat)
   personaStudioChat.value = chat
   routeCapability('persona')
 }
 
 const closePersonaStudio = () => {
+  personaTarget.value = null
   personaStudioChat.value = null
 }
 
@@ -139,11 +222,39 @@ const forwardPersonaTurnOverride = (payload: {
   seedId: string
   instructions: string[]
 }) => {
-  emit('persona-turn-override', payload)
+  const identity: ActiveTurn = {
+    sessionId: payload.sessionId, customerId: payload.customerId,
+    agentId: payload.agentId, sourceMessageId: personaTarget.value?.sourceMessageId ?? null,
+  }
+  const failure = requestTurnIntent(identity, payload.instructions.join('\n'))
+  personaFeedback.value = failure || '已提交至当前 Reply Brain；等待本轮应用回执。'
 }
 
 const stageGirlfriendIntent = (draft: YanceGirlfriendIntentDraft) => {
-  emit('girlfriend-intent-draft', draft)
+  if (draft.scope !== 'turn' || !draft.turnOnly) {
+    girlfriendFeedback.value = {
+      state: 'error',
+      detail: '仅支持本轮、不学习。跨联系人、语言、关系或全局规则须使用原生 Persona 审批与持久化流程。',
+    }
+    return
+  }
+  const persona = [draft.instruction, draft.personaNote].filter(Boolean).join('\n')
+  const failure = requestTurnIntent(girlfriendTarget.value, persona, draft.goalNote, true)
+  if (failure) girlfriendFeedback.value = { state: 'error', detail: failure }
+}
+const undoGirlfriendIntent = () => {
+  // Preserve the existing independent orchestration's undo owner when present.
+  if (props.girlfriendOrchestration?.state === 'receipt' && props.girlfriendOrchestration.undoAvailable) {
+    emit('girlfriend-undo-request')
+    return
+  }
+  const intent = stagedTurnIntent.value
+  if (!intent || intent.action !== 'apply' || !sameTurn(activeTurn.value, intent)) {
+    girlfriendFeedback.value = { state: 'error', detail: '该回合已失效，无法撤销。' }
+    return
+  }
+  stagedTurnIntent.value = { ...intent, nonce: ++intentNonce, action: 'undo' }
+  girlfriendFeedback.value = { state: 'pending', detail: '正在撤销本轮覆盖…' }
 }
 
 type AdoptMediaIntent = (intent: {
@@ -191,7 +302,10 @@ const adoptCandidate = (
     data-frame-height="620"
     data-native-window-control="hold"
   >
+    <YanceEmptyConversation v-if="nativeEmptyConversations" :refreshing="nativeEmptyLoading"
+      @refresh="refreshNativeConversationEmpty" />
     <ConversationsView
+      v-else
       :layout-hide-header="false"
       frozen-yance
       data-yance-native-host
@@ -234,7 +348,8 @@ const adoptCandidate = (
             type="button"
             data-yance-girlfriend-toggle
             :aria-pressed="girlfriendBrainOpen"
-            @click="openGirlfriendBrain"
+            aria-keyshortcuts="Control+Shift+G"
+            @click="openGirlfriendBrain(chat)"
           >
             闺蜜大脑
           </button>
@@ -273,6 +388,9 @@ const adoptCandidate = (
           :adopt-draft="adoptDraft"
           :adopt-attachment="adoptAttachment"
           :adopt-media-intent="adoptMediaIntent"
+          :turn-intent="stagedTurnIntent"
+          @active-turn="receiveActiveTurn"
+          @turn-intent-receipt="receiveIntentReceipt"
           @toggle="toggleReplyBrain"
         />
         <section
@@ -347,9 +465,10 @@ const adoptCandidate = (
       :image-readiness="FROZEN_VOICE_MEDIA_UI_READINESS.image"
       :video-readiness="FROZEN_VOICE_MEDIA_UI_READINESS.video"
       :orchestration="props.girlfriendOrchestration"
+      :intent-feedback="girlfriendFeedback"
       @close="closeGirlfriendBrain"
       @intent-draft="stageGirlfriendIntent"
-      @undo-request="emit('girlfriend-undo-request')"
+      @undo-request="undoGirlfriendIntent"
       @permission-decision="emit('girlfriend-permission-decision', $event)"
     />
 
@@ -357,6 +476,7 @@ const adoptCandidate = (
       v-if="personaStudioChat"
       :chat="personaStudioChat"
       :open="true"
+      :turn-intent-feedback="personaFeedback"
       @close="closePersonaStudio"
       @turn-override="forwardPersonaTurnOverride"
     />
@@ -364,6 +484,42 @@ const adoptCandidate = (
 </template>
 
 <style scoped>
+.yance-master-frame {
+  --bg:#151622;--bg2:#211e2a;--bg3:#2b2230;--text:#efe8ee;--text2:#d3c8d3;
+  --text3:#ad9fae;--muted:#a69cae;--o05:#ffffff0a;--o08:#ffffff14;--o10:#ffffff19;
+  --o14:#ffffff26;--accent:#bd93d2;--accent-bg-12:#79518f33;--accent-border:#9671a7;
+  --warning:#efb58e;--space-xs:6px;--space-sm:10px;
+  color:var(--text);font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;
+  background:radial-gradient(ellipse at 8% 0%,#432a3238,transparent 54%),#0e101b;
+  border-color:#654a5d;border-radius:13px;box-shadow:0 18px 56px #0008;
+}
+.yance-master-frame :deep(.dashboard-layout),
+.yance-master-frame :deep(.main-content),
+.yance-master-frame :deep(.conversations-page) {
+  background:transparent;color:var(--text);
+}
+.yance-master-frame :deep(.conversations-page) {min-height:0;height:100%;overflow:hidden}
+.yance-master-frame :deep(.conversation-viewport){height:100%;min-height:0}
+.yance-master-frame :deep(.conversations-page .page-header){
+  border-bottom:1px solid #655065;background:#1d1c29}
+.yance-master-frame :deep(.conversations-page .page-header h1){color:#e7c594;font-size:15px}
+.yance-master-frame :deep(.conversation-list),
+.yance-master-frame :deep(.conversation-sidebar),
+.yance-master-frame :deep(.conversations-list){
+  background:#191925;border-right:1px solid #58465d;color:#e4d7e8}
+.yance-master-frame :deep(.message-bubble){border-color:#57435c}
+.yance-master-frame :deep(.message-input),
+.yance-master-frame :deep(textarea){background:#181723;color:#efe8ef}
+.yance-master-frame :deep(.yance-reply-runtime){background:#211b2c;border-color:#805b8a}
+.yance-master-frame :deep(.yance-reply-runtime__toggle){color:#eac9f0}
+.yance-master-frame :deep(.yance-reply-candidate){background:#302334;border-color:#795a83}
+.yance-top-actions{color:#e3d3e5}
+.yance-top-actions button,.yance-home-entry{border-color:#69536d;color:#e9daec;background:#2a2331}
+.yance-top-actions [data-yance-girlfriend-toggle]{background:#613e74;border-color:#a77ab3;color:#f6def7}
+.yance-top-actions :is(button,a):focus-visible,
+.yance-master-frame :deep(button:focus-visible){outline:2px solid #f5c783;outline-offset:2px}
+.yance-reply-brain-seam{border-color:#79518f;background:#211b2c}
+.yance-reply-state-card{border-color:#785778;background:#302131}
 .yance-rail-translation {
   margin-left: 44px;
   min-width: 0;

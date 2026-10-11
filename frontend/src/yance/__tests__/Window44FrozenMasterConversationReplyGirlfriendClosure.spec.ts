@@ -26,7 +26,7 @@ describe('Window 44 Frozen master / Conversation / Reply / Girlfriend closure', 
     expect(host).toContain('frozen-yance')
     expect(host).not.toContain('YanceShellView')
     expect(host).not.toMatch(/data-yance-(?:minimize|maximize|window-close)/)
-    expect(conversationsView).toContain('<DashboardLayout :hideHeader="props.layoutHideHeader">')
+    expect(conversationsView).toMatch(/<DashboardLayout\s+:hideHeader="props\.layoutHideHeader"\s+class="conversation-viewport">/)
     expect(conversationsView).toContain('v-if="!props.frozenYance" class="page-header"')
   })
 

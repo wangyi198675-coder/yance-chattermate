@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import ConversationsList from '@/components/conversations/ConversationsList.vue'
 import ConversationChat from '@/components/conversations/ConversationChat.vue'
 import FileUpload from '@/components/common/FileUpload.vue'
+import { chatService } from '@/services/chat'
 
 const testState = vi.hoisted(() => ({
   openConversation: vi.fn(),
@@ -220,7 +221,13 @@ describe('Window124 / Window138 Conversation core interaction', () => {
     expect(wrapper.find('[data-yance-contact-menu-items]').exists()).toBe(true)
   })
 
-  it('converges contact right-click on the same Headless UI menu and keeps unavailable actions truthful', async () => {
+  it('converges right-click on one accessible Headless UI menu and persists native contact actions', async () => {
+    const updateInboxState = vi.spyOn(chatService, 'updateInboxState').mockResolvedValue({
+      followed: true,
+      archived: false,
+      favourite: false,
+      last_read_message_id: null,
+    } as any)
     const wrapper = mount(ConversationsList, {
       props: {
         conversations: [conversation],
@@ -240,16 +247,44 @@ describe('Window124 / Window138 Conversation core interaction', () => {
         },
       },
     })
+    const row = wrapper.get('.conversation-item')
 
-    await wrapper.get('.conversation-item').trigger('contextmenu')
+    await row.trigger('contextmenu')
     await nextTick()
-
-    expect(wrapper.find('[data-yance-contact-menu-items]').exists()).toBe(true)
+    const menu = wrapper.get('[data-yance-contact-menu-items]')
+    expect(menu.attributes('role')).toBe('menu')
     expect(wrapper.get('[data-yance-contact-action="open"]').text()).toBe('打开')
     expect(wrapper.get('[data-yance-contact-action="details"]').text()).toBe('详情')
-    expect(wrapper.get('[data-yance-follow-action]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-yance-archive-action]').attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('关注与归档当前暂无可用原生操作')
+    const follow = wrapper.get('[data-yance-follow-action]')
+    const archive = wrapper.get('[data-yance-archive-action]')
+    expect(follow.attributes('disabled')).toBeUndefined()
+    expect(archive.attributes('disabled')).toBeUndefined()
+    expect(follow.attributes('data-native-state')).toBe('SessionToAgent.is_followed')
+    expect(archive.attributes('data-native-state')).toBe('SessionToAgent.is_archived')
+    expect(testState.openConversation).not.toHaveBeenCalled()
+
+    await follow.trigger('click')
+    await flushPromises()
+    expect(updateInboxState).toHaveBeenCalledExactlyOnceWith('session-1', { followed: true })
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
+    expect(testState.openConversation).not.toHaveBeenCalled()
+
+    await row.trigger('contextmenu')
+    await nextTick()
+    await wrapper.get('[data-yance-archive-action]').trigger('click')
+    await flushPromises()
+    expect(updateInboxState).toHaveBeenNthCalledWith(2, 'session-1', { archived: true })
+    expect(wrapper.emitted('refresh')).toHaveLength(2)
+    expect(testState.openConversation).not.toHaveBeenCalled()
+
+    updateInboxState.mockRejectedValueOnce(new Error('native owner unavailable'))
+    await row.trigger('contextmenu')
+    await nextTick()
+    await wrapper.get('[data-yance-follow-action]').trigger('click')
+    await flushPromises()
+    expect(updateInboxState).toHaveBeenNthCalledWith(3, 'session-1', { followed: true })
+    expect(wrapper.emitted('refresh')).toHaveLength(3)
+    expect(wrapper.text()).toContain('操作未保存，请重试')
   })
 
   it('uses one row-local message action model for visible overflow, right-click, text and media', async () => {

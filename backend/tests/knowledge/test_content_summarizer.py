@@ -353,7 +353,6 @@ class TestChatAgentURLInstructions:
             mock_shopify_repo.return_value.get_agent_shopify_config.return_value = None
 
             # Mock storage and model
-            mock_storage.return_value = MagicMock()
             mock_create_model.return_value = MagicMock()
             mock_agent_instance = MagicMock()
             mock_agent_class.return_value = mock_agent_instance

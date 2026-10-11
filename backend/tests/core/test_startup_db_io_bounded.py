@@ -45,6 +45,11 @@ def _subprocess_env(site_dir: Path, database_url: str) -> dict[str, str]:
     if current:
         paths.append(current)
     env["PYTHONPATH"] = os.pathsep.join(paths)
+    # Exercise the real app.main import, not a second coverage-instrumented
+    # Python process. The parent pytest run still measures app coverage; its
+    # COV_CORE_* hook can turn Windows import time into a false 30s timeout.
+    for key in ("COV_CORE_SOURCE", "COV_CORE_CONFIG", "COV_CORE_DATAFILE"):
+        env.pop(key, None)
     return env
 
 

@@ -18,7 +18,7 @@ describe('native-hosted Yance structural gate', () => {
     const host = read('../YanceNativeHostView.vue')
     expect(dashboard).toContain('useTheme')
     expect(dashboard).toContain('NotificationList')
-    expect(view).toContain('<DashboardLayout :hideHeader=\"props.layoutHideHeader\">')
+    expect(view).toMatch(/<DashboardLayout\s+:hideHeader="props\.layoutHideHeader"\s+class="conversation-viewport">/)
     expect(host).toContain(':layout-hide-header=\"false\"')
   })
 

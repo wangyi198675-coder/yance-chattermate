@@ -31,6 +31,17 @@ import TicketApprovalBanner from '@/components/tickets/TicketApprovalBanner.vue'
 import { permissionChecks } from '@/utils/permissions'
 import type { TicketPriority, TicketStatus } from '@/types/ticket'
 
+// Translate display labels only. Native status and priority API values are unchanged.
+const statusLabel: Record<TicketStatus, string> = {
+  open: '待处理', triaging: 'AI 初步分类', investigating: 'AI 调查中',
+  awaiting_approval: '待审批', in_progress: '处理中',
+  resolved_pending_confirmation: '已解决，待确认', resolved: '已解决',
+  closed: '已关闭', reopened: '已重新打开',
+}
+const priorityLabel: Record<TicketPriority, string> = {
+  urgent: '紧急', high: '高', medium: '中', low: '低',
+}
+
 const route = useRoute()
 const router = useRouter()
 const ticketId = computed(() => String(route.params.id))
@@ -49,7 +60,7 @@ const canEditSettings = permissionChecks.canManageOrganization()
 
 // Shared by the header's Investigate button and the panel's guided re-run, so
 // the two can't drift into disagreeing about why a run is unavailable.
-const RESOLVED_TOOLTIP = 'This ticket is resolved — reopen it to investigate again'
+const RESOLVED_TOOLTIP = '工单已解决。如需再次调查，请先重新打开工单。'
 
 // The banner shows a pending proposal always; a decided one only while the
 // ticket still reflects that decision (approved → resolved states).
@@ -70,11 +81,11 @@ const resolveOutcome = ref('fixed')
 const resolveCustomerMessage = ref('')
 
 const RESOLVE_OUTCOMES = [
-  ['fixed', 'Fixed'],
-  ['workaround', 'Workaround provided'],
-  ['not_a_bug', 'Not a bug'],
-  ['duplicate', 'Duplicate'],
-  ['cannot_reproduce', 'Cannot reproduce'],
+  ['fixed', '问题已修复'],
+  ['workaround', '已提供临时解决办法'],
+  ['not_a_bug', '非缺陷'],
+  ['duplicate', '重复工单'],
+  ['cannot_reproduce', '无法复现'],
 ] as const
 
 const isReopenable = computed(() =>
@@ -108,7 +119,7 @@ function commitTitle() {
 function copyLink() {
   navigator.clipboard
     .writeText(window.location.href)
-    .then(() => toast.success('Link copied'))
+    .then(() => toast.success('链接已复制'))
     .catch(() => {})
 }
 
@@ -134,10 +145,10 @@ async function submitResolve() {
 <template>
   <DashboardLayout>
   <div class="ticket-detail-view">
-    <div v-if="isLoading && !ticket" class="loading-state">Loading ticket…</div>
+    <div v-if="isLoading && !ticket" class="loading-state">正在加载工单…</div>
     <div v-else-if="error && !ticket" class="error-state">
       {{ error }}
-      <button class="back-btn" @click="router.push('/tickets')">← Back to tickets</button>
+      <button class="back-btn" @click="router.push('/tickets')">← 返回工单列表</button>
     </div>
 
     <div v-else-if="ticket" class="detail-grid">
@@ -145,29 +156,29 @@ async function submitResolve() {
       <div class="main-col">
         <div class="detail-header">
           <div class="header-chips">
-            <button class="back-chip" @click="router.push('/tickets')">← Tickets</button>
+            <button class="back-chip" @click="router.push('/tickets')">← 工单</button>
             <span class="ticket-number">{{ ticket.display_number }}</span>
             <TicketStatusBadge :status="ticket.status" />
             <TicketAiStateChip :state="ticket.ai_state" />
-            <button class="copy-link" @click="copyLink">Copy link</button>
+            <button class="copy-link" @click="copyLink">复制链接</button>
           </div>
 
           <input
             class="title-input"
             :value="titleDraft ?? ticket.title"
             :readonly="!canManage"
-            :title="canManage ? 'Click to edit the title' : undefined"
+            :title="canManage ? '点击编辑标题' : undefined"
             @input="titleDraft = ($event.target as HTMLInputElement).value"
             @blur="commitTitle"
             @keydown.enter="($event.target as HTMLInputElement).blur()"
           />
           <div v-if="ticket.original_title && ticket.original_title !== ticket.title" class="original-title">
-            Originally: “{{ ticket.original_title }}”
+            原标题：“{{ ticket.original_title }}”
           </div>
 
           <div class="control-row">
             <div class="control">
-              <span class="control-label">Status</span>
+              <span class="control-label">状态</span>
               <select
                 :value="ticket.status"
                 :disabled="!canManage"
@@ -175,15 +186,15 @@ async function submitResolve() {
                 @change="setStatus(($event.target as HTMLSelectElement).value as TicketStatus)"
               >
                 <option v-if="!SELECTABLE_STATUSES.includes(ticket.status)" :value="ticket.status">
-                  {{ statusMeta(ticket.status).label }}
+                  {{ statusLabel[ticket.status] || statusMeta(ticket.status).label }}
                 </option>
                 <option v-for="status in SELECTABLE_STATUSES" :key="status" :value="status">
-                  {{ statusMeta(status).label }}
+                  {{ statusLabel[status] || statusMeta(status).label }}
                 </option>
               </select>
             </div>
             <div class="control">
-              <span class="control-label">Priority</span>
+              <span class="control-label">优先级</span>
               <select
                 :value="ticket.priority"
                 :disabled="!canManage"
@@ -191,11 +202,11 @@ async function submitResolve() {
                 :style="{ color: priorityMeta(ticket.priority).color }"
                 @change="setPriority(($event.target as HTMLSelectElement).value as TicketPriority)"
               >
-                <option v-for="p in PRIORITIES" :key="p" :value="p">{{ priorityMeta(p).label }}</option>
+                <option v-for="p in PRIORITIES" :key="p" :value="p">{{ priorityLabel[p] || priorityMeta(p).label }}</option>
               </select>
             </div>
             <div class="control">
-              <span class="control-label">Severity</span>
+              <span class="control-label">严重级别</span>
               <select
                 :value="ticket.severity ?? ''"
                 :disabled="!canManage"
@@ -217,26 +228,26 @@ async function submitResolve() {
                 :title="
                   isReopenable
                     ? RESOLVED_TOOLTIP
-                    : 'Run an AI investigation (hypotheses + evidence + RCA)'
+                    : '启动 AI 调查（假设、证据及根因分析）'
                 "
                 @click="investigate()"
               >
                 <font-awesome-icon :icon="['fas', 'bolt']" />
-                Investigate
+                开始调查
               </button>
               <button
                 v-if="canManage && isReopenable"
                 class="action-btn"
                 @click="reopen()"
               >
-                Reopen
+                重新打开
               </button>
               <button
                 v-if="canManage && !isReopenable"
                 class="action-btn resolve"
                 @click="showResolvePanel = !showResolvePanel"
               >
-                Resolve…
+                解决工单…
               </button>
             </div>
           </div>
@@ -254,70 +265,69 @@ async function submitResolve() {
 
         <div v-if="hasActiveRun" class="run-banner">
           <span class="run-dot"></span>
-          AI is working on this ticket — triage and classification update live.
+          AI 正在处理这张工单，初步判断与分类状态将持续更新。
         </div>
 
         <div v-if="showResolvePanel" class="resolve-panel">
-          <div class="resolve-title">Resolve {{ ticket.display_number }}</div>
-          <label class="field-label">Outcome</label>
+          <div class="resolve-title">解决工单 {{ ticket.display_number }}</div>
+          <label class="field-label">处理结果</label>
           <select v-model="resolveOutcome" class="control-select outcome-select">
             <option v-for="[value, label] in RESOLVE_OUTCOMES" :key="value" :value="value">
               {{ label }}
             </option>
           </select>
           <template v-if="canNotifyCustomer">
-            <label class="field-label">Message to the customer (plain language)</label>
+            <label class="field-label">给客户的说明（通俗易懂）</label>
             <textarea
               v-model="resolveCustomerMessage"
               class="resolve-textarea"
-              placeholder="What happened and what was done to fix it…"
+              placeholder="简要说明发生了什么，以及采取了哪些处理措施…"
             ></textarea>
           </template>
           <div class="resolve-actions">
-            <button class="action-btn" @click="showResolvePanel = false">Cancel</button>
+            <button class="action-btn" @click="showResolvePanel = false">取消</button>
             <button class="resolve-submit" :disabled="isResolving" @click="submitResolve">
-              {{ isResolving ? 'Resolving…' : (canNotifyCustomer ? 'Resolve & notify customer' : 'Resolve') }}
+              {{ isResolving ? '正在处理…' : (canNotifyCustomer ? '解决并通知客户' : '解决工单') }}
             </button>
           </div>
           <div class="resolve-hint">
             <template v-if="canNotifyCustomer">
-              The ticket waits for customer confirmation and closes automatically after the
-              configured timeout.
+              工单将等待客户确认；达到设置的等待期限后自动关闭。
             </template>
             <template v-else>
-              No customer is linked to this ticket, so no notification will be sent.
+              此工单未关联客户，因此不会发送通知。
             </template>
           </div>
         </div>
 
         <div v-if="ticket.description || canManage" class="description-card">
           <div class="card-header-row">
-            <div class="card-label">Description</div>
+            <div class="card-label">问题描述</div>
             <button
               v-if="canManage && !isEditingDescription"
               class="edit-btn"
               @click="startDescriptionEdit"
             >
-              {{ ticket.description ? 'Edit' : 'Add' }}
+              {{ ticket.description ? '编辑' : '添加' }}
             </button>
           </div>
           <template v-if="isEditingDescription">
             <textarea
               v-model="descriptionDraft"
               class="description-editor"
-              placeholder="What's happening? Include any error, customer impact, and steps…"
+              placeholder="描述问题、错误信息、对客户的影响以及复现步骤…"
             ></textarea>
             <div class="edit-actions">
-              <button class="action-btn" @click="isEditingDescription = false">Cancel</button>
-              <button class="edit-save" @click="saveDescription">Save</button>
+              <button class="action-btn" @click="isEditingDescription = false">取消</button>
+              <button class="edit-save" @click="saveDescription">保存</button>
             </div>
           </template>
           <p v-else-if="ticket.description" class="description-text">{{ ticket.description }}</p>
-          <p v-else class="description-empty">No description yet.</p>
+          <p v-else class="description-empty">暂无问题描述。</p>
         </div>
 
         <div v-if="ticket.ai_summary" class="summary-card">
-          <div class="card-label">AI summary</div>
+          <div class="card-label">AI 摘要</div>
           <p class="description-text">{{ ticket.ai_summary }}</p>
         </div>
 

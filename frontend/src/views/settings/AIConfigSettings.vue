@@ -18,6 +18,10 @@ limitations under the License.
   <DashboardLayout>
     <div class="dashboard-container">
       <div class="settings-section">
+        <header class="native-page-intro">
+          <h1>AI 模型设置</h1>
+          <p>管理模型服务商和模型参数。未配置或接口报错时，以实际返回的状态为准。</p>
+        </header>
         <AISetup @ai-setup-complete="handleSetupComplete" />
       </div>
     </div>
@@ -44,6 +48,8 @@ const handleSetupComplete = () => {
   flex: 1;
   padding: var(--space-lg);
 }
+.native-page-intro h1 { margin: 0; font-size: 19px; color: var(--text); }
+.native-page-intro p { margin: 5px 0 14px; color: var(--muted); font-size: 12px; }
 
 .page-header {
   margin-bottom: var(--space-xl);

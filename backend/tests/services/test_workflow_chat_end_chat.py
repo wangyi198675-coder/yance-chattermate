@@ -176,6 +176,8 @@ class TestWorkflowChatServiceEndChat:
                     model_name='gpt-4',
                     model_type='openai',
                     base_url=None,
+                    fallback_model_name=None,
+                    reasoning_strength=None,
                     org_id="test-org",
                     agent_id='test-agent-id',
                     customer_id="test-customer",
