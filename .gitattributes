@@ -1,0 +1,4 @@
+# Preserve exact W377 frozen requirement contract CSV bytes across Windows/Linux checkout.
+# These two files are intentionally CRLF and hash-pinned; never normalize.
+frontend/e2e/quality/contracts/frozen-252.csv -text
+frontend/e2e/quality/contracts/frozen-20-composites.csv -text
